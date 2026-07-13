@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -19,7 +20,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"crypto/rand"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
@@ -151,7 +151,16 @@ func (s *server) loadFolders(book string) ([]Folder, error) {
 }
 func (s *server) save(books []Notebook) error {
 	type shareRow struct{ token, documentID, createdAt string }
-	shares:=[]shareRow{};if rows,e:=s.db.Query(`SELECT token,document_id,created_at FROM shares`);e==nil{for rows.Next(){var x shareRow;if rows.Scan(&x.token,&x.documentID,&x.createdAt)==nil{shares=append(shares,x)}};rows.Close()}
+	shares := []shareRow{}
+	if rows, e := s.db.Query(`SELECT token,document_id,created_at FROM shares`); e == nil {
+		for rows.Next() {
+			var x shareRow
+			if rows.Scan(&x.token, &x.documentID, &x.createdAt) == nil {
+				shares = append(shares, x)
+			}
+		}
+		rows.Close()
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -190,7 +199,9 @@ func (s *server) save(books []Notebook) error {
 			return err
 		}
 	}
-	for _,x:=range shares{_,_ = tx.Exec(`INSERT OR IGNORE INTO shares(token,document_id,created_at) VALUES(?,?,?)`,x.token,x.documentID,x.createdAt)}
+	for _, x := range shares {
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO shares(token,document_id,created_at) VALUES(?,?,?)`, x.token, x.documentID, x.createdAt)
+	}
 	return tx.Commit()
 }
 func cors(next http.HandlerFunc) http.HandlerFunc {
@@ -416,6 +427,73 @@ type buildManifest struct {
 }
 type siteLink struct{ Title, URL string }
 
+func randomToken() (string, error) {
+	b := make([]byte, 12)
+	if _, e := rand.Read(b); e != nil {
+		return "", e
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func (s *server) share(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var in struct {
+		DocumentID string `json:"documentId"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.DocumentID == "" {
+		http.Error(w, "documentId required", 400)
+		return
+	}
+	var title, content, book, token string
+	e := s.db.QueryRow(`SELECT d.title,d.content,n.title,COALESCE(sh.token,'') FROM documents d JOIN notebooks n ON n.id=d.notebook_id LEFT JOIN shares sh ON sh.document_id=d.id WHERE d.id=?`, in.DocumentID).Scan(&title, &content, &book, &token)
+	if e == sql.ErrNoRows {
+		http.Error(w, "document not found", 404)
+		return
+	}
+	if e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	if token == "" {
+		for i := 0; i < 5; i++ {
+			token, e = randomToken()
+			if e != nil {
+				break
+			}
+			_, e = s.db.Exec(`INSERT INTO shares(token,document_id,created_at) VALUES(?,?,?)`, token, in.DocumentID, time.Now().Format(time.RFC3339))
+			if e == nil {
+				break
+			}
+		}
+		if e != nil {
+			http.Error(w, e.Error(), 500)
+			return
+		}
+	}
+	dir := filepath.Join("public-site", "s", token)
+	if e = os.MkdirAll(dir, 0755); e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	os.WriteFile("public-site/style.css", []byte(css), 0644)
+	f, e := os.Create(filepath.Join(dir, "index.html"))
+	if e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	defer f.Close()
+	t := template.Must(template.New("share").Parse(page))
+	e = t.Execute(f, map[string]any{"Title": title, "Book": book, "HTML": s.render(content), "Date": time.Now().Format("2006-01-02"), "Sidebar": false, "Links": []siteLink{}, "Current": "/s/" + token + "/"})
+	if e != nil {
+		http.Error(w, e.Error(), 500)
+		return
+	}
+	jsonOut(w, map[string]any{"ok": true, "id": token, "url": "/s/" + token + "/", "previewUrl": "/site/s/" + token + "/"})
+}
+
 func (s *server) build(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
@@ -530,8 +608,10 @@ func main() {
 	http.HandleFunc("/api/import", cors(s.importMD))
 	http.HandleFunc("/api/export", cors(s.exportMD))
 	http.HandleFunc("/api/build", cors(s.build))
+	http.HandleFunc("/api/share", cors(s.share))
 	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("data/uploads"))))
 	http.Handle("/site/", http.StripPrefix("/site/", http.FileServer(http.Dir("public-site"))))
+	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
 	fmt.Printf("Mdocman API: http://localhost:%s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

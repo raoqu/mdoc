@@ -38,6 +38,7 @@ DEPLOY_TARGET=user@host:/var/www/notes ./deploy.sh
 旧版 `data/notebooks.json` 会在 SQLite 数据库为空时自动迁移，迁移完成后以数据库为准。
 
 数据库结构和数据流参见 [docs/architecture.md](docs/architecture.md)。
+完整操作说明参见 [docs/使用说明.md](docs/使用说明.md)。
 
 ## 静态发布
 

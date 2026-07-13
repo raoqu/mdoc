@@ -62,6 +62,10 @@ export default defineConfig(async () => {
           target: apiTarget,
           changeOrigin: true,
         },
+        "/s": {
+          target: apiTarget,
+          changeOrigin: true,
+        },
       },
     },
     plugins: [
