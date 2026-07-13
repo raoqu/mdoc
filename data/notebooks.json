@@ -1,0 +1,27 @@
+[
+  {
+    "id": "product",
+    "title": "产品手记",
+    "description": "记录产品与设计思考",
+    "accent": "#4d6b52",
+    "folders": [
+      {
+        "id": "thinking",
+        "title": "产品思考",
+        "open": true,
+        "docs": [
+          {
+            "id": "principles",
+            "title": "设计原则",
+            "updatedAt": "刚刚",
+            "content": "# 设计原则\n\n好的产品像一间安静的房间：它不会抢走注意力，而是让使用者自然地完成想做的事。\n\n## 保持清晰\n\n每个页面只应有一个最重要的动作。视觉层级不是装饰，而是在替用户做决定。\n\n> 复杂度不会消失，它只能被转移。我们应该把复杂度留给系统，而不是用户。\n\n## 让内容成为主角\n\n- 让排版服务于阅读\n- 用留白建立节奏\n- 保持操作可预测\n\n## 从真实场景出发\n\n设计不是一组静态画面。它是人在具体环境中，为了完成目标而经历的连续过程。"
+          },
+          { "id": "roadmap", "title": "2026 路线图", "updatedAt": "昨天", "content": "# 2026 路线图\n\n## 第一季度\n\n完成编辑、组织与发布的核心闭环。" }
+        ]
+      },
+      { "id": "research", "title": "用户研究", "open": true, "docs": [{ "id": "interviews", "title": "访谈记录", "updatedAt": "3 天前", "content": "# 访谈记录\n\n整理访谈洞察。" }] },
+      { "id": "archive", "title": "归档", "open": false, "docs": [] }
+    ]
+  },
+  { "id": "engineering", "title": "工程日志", "description": "技术决策与开发记录", "accent": "#9b7653", "folders": [{ "id": "adr", "title": "架构决策", "open": true, "docs": [{ "id": "stack", "title": "技术栈选择", "updatedAt": "上周", "content": "# 技术栈选择\n\n后端采用 Go，前端使用 TypeScript 与 React。" }] }] }
+]
