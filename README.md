@@ -21,7 +21,13 @@
 ./clean.sh
 ```
 
-构建会生成两个独立程序：`mdocman-admin` 是管理端，负责 SQLite、编辑和静态生成；`mdocman-site` 是无数据库依赖的只读发布端，仅托管 `public-site/`。发布端默认监听 `8090`：
+构建会生成 `dist/bin/mdoc`，其中已经内嵌预渲染首页和全部浏览器资源。
+部署管理端时只需复制这一个二进制文件，运行后访问 `http://localhost:8080/`；
+无需额外部署前端目录，也不需要在运行机器上安装 Node.js。`dev.sh` 仍使用独立的
+Vinext 开发服务器和 HMR，不受生产内嵌方式影响。
+
+构建还会生成 `mdocman-site`，它是无数据库依赖的只读发布端，仅托管
+`public-site/`。发布端默认监听 `8090`：
 
 ```bash
 SITE_PORT=8090 SITE_DIR=public-site ./dist/bin/mdocman-site
@@ -36,6 +42,21 @@ DEPLOY_TARGET=user@host:/var/www/notes ./deploy.sh
 管理界面的“发布含目录”开关决定静态页面是否生成左侧目录栏。
 
 旧版 `data/notebooks.json` 会在 SQLite 数据库为空时自动迁移，迁移完成后以数据库为准。
+
+## 命令行预览
+
+构建后可直接预览一个 Markdown 文件或目录：
+
+```bash
+dist/bin/mdoc ./README.md
+dist/bin/mdoc ./docs
+```
+
+命令会启动仅监听本机的临时服务并自动打开浏览器。目录优先显示其中的
+`README.md` 或 `index.md`，否则显示可浏览的文件列表。Markdown 文件的 URL
+保持原有目录结构，因此文档内指向其他本地 Markdown 文件的相对链接仍可继续
+访问预览；图片等相对资源也会正常加载。可通过 `MDOC_PORT=8088` 指定端口，
+通过 `MDOC_NO_BROWSER=1` 禁止自动打开浏览器。
 
 数据库结构和数据流参见 [docs/architecture.md](docs/architecture.md)。
 完整操作说明参见 [docs/使用说明.md](docs/使用说明.md)。

@@ -718,6 +718,17 @@ const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><met
 const css = `:root{color:#30332e;background:#faf9f5;font-family:Georgia,"Songti SC",serif}body{margin:0}header{height:64px;border-bottom:1px solid #e5e3dc;display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,calc((100% - 1080px)/2));font-family:system-ui}a{color:#45604a;text-decoration:none}.layout{display:flex;max-width:1080px;margin:0 auto}.layout aside{width:220px;flex:none;padding:70px 24px;border-right:1px solid #e5e3dc;font:13px system-ui}.layout aside b{display:block;margin-bottom:14px}.layout aside a{display:block;padding:7px 9px;border-radius:5px}.layout aside a.active{background:#e4e9e2;font-weight:600}.layout main{width:100%;max-width:820px;margin:70px auto;padding:0 36px;min-height:70vh}article{font-size:18px;line-height:1.9}img{max-width:100%;border-radius:8px}table{border-collapse:collapse;width:100%;display:block;overflow:auto}th,td{border:1px solid #d8d8d2;padding:8px 12px}th{background:#efeee9}pre{background:#282b27;color:#e8e9e5;padding:18px;overflow:auto;border-radius:8px}code{font:14px ui-monospace,monospace}p code{background:#ecebe6;color:#7d4d3a;padding:2px 5px;border-radius:4px}blockquote{border-left:3px solid #78907c;background:#f0f3ed;margin:25px 0;padding:14px 20px}footer{text-align:center;color:#aaa;font:12px system-ui;padding:35px}@media(max-width:760px){.layout aside{display:none}.layout main{padding:0 22px}}`
 
 const previewPage = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><style>{{.CSS}}</style></head><body><div class="layout"><main><article>{{.HTML}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>`
+const previewContentSecurityPolicy = "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+
+func writePreviewPage(w http.ResponseWriter, title string, html template.HTML) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", previewContentSecurityPolicy)
+	t := template.Must(template.New("preview").Parse(previewPage))
+	if err := t.Execute(w, map[string]any{"Title": title, "HTML": html, "CSS": template.CSS(css)}); err != nil {
+		log.Printf("preview render: %v", err)
+	}
+}
 
 func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/preview/")
@@ -752,13 +763,7 @@ func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "未命名笔记"
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
-	t := template.Must(template.New("preview").Parse(previewPage))
-	if err := t.Execute(w, map[string]any{"Title": title, "HTML": s.render(markdownBody(content)), "CSS": template.CSS(css)}); err != nil {
-		log.Printf("preview render: %v", err)
-	}
+	writePreviewPage(w, title, s.render(markdownBody(content)))
 }
 
 type buildManifest struct {
@@ -932,12 +937,19 @@ func migrateJSON(s *server) {
 	}
 }
 func main() {
+	md := goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote, extension.Typographer), goldmark.WithParserOptions(parser.WithAutoHeadingID()))
+	if target, ok := pathPreviewArgument(os.Args[1:]); ok {
+		if err := servePathPreview(target, md, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	db, e := openDB()
 	if e != nil {
 		log.Fatal(e)
 	}
 	defer db.Close()
-	s := &server{db: db, md: goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote, extension.Typographer), goldmark.WithParserOptions(parser.WithAutoHeadingID()))}
+	s := &server{db: db, md: md}
 	migrateJSON(s)
 	if cliRequested(s) {
 		return
@@ -975,6 +987,7 @@ func main() {
 	http.Handle("/audio/", http.StripPrefix("/audio/", http.FileServer(http.Dir("data/audio-memos"))))
 	http.Handle("/site/", http.StripPrefix("/site/", http.FileServer(http.Dir("public-site"))))
 	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
+	http.Handle("/", embeddedFrontendHandler())
 	fmt.Printf("Mdocman API: http://localhost:%s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
