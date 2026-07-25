@@ -5,16 +5,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 command -v go >/dev/null 2>&1 || { echo "错误：未找到 Go。" >&2; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "错误：未找到 npm。" >&2; exit 1; }
+command -v pnpm >/dev/null 2>&1 || { echo "错误：未找到 pnpm。" >&2; exit 1; }
 
 if [[ ! -d node_modules ]]; then
-  npm install
+  pnpm install
 fi
 
 mkdir -p dist/bin
 
 echo "构建 TypeScript 前端…"
-npm run build
+pnpm run build
 
 echo "构建 Go 管理端与发布端…"
 go build -trimpath -ldflags="-s -w" -o dist/bin/mdocman-admin ./cmd/mdocman

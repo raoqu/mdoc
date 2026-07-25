@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "墨笺网页捕获",
+  "version": "1.0.0",
+  "description": "将当前页面、选区和截图排队保存到本机墨笺知识库。",
+  "permissions": ["activeTab", "scripting", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8080/*"],
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "捕获到墨笺" },
+  "commands": {
+    "capture-page": {
+      "suggested_key": { "default": "Ctrl+Shift+K", "mac": "Command+Shift+K" },
+      "description": "捕获当前页面"
+    }
+  }
+}

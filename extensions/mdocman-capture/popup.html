@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>捕获到墨笺</title>
+  </head>
+  <body>
+    <header><strong>墨笺捕获</strong><span id="queue"></span></header>
+    <label>扩展令牌<input id="token" type="password" placeholder="在墨笺设置中创建" autocomplete="off" /></label>
+    <label>补充说明<textarea id="note" rows="3" placeholder="可选"></textarea></label>
+    <button id="capture">捕获当前页面</button>
+    <p id="status">页面会先进入本地队列；墨笺服务恢复后自动重试。</p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -28,10 +28,16 @@ import (
 )
 
 type Doc struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	UpdatedAt string `json:"updatedAt"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Content   string   `json:"content"`
+	UpdatedAt string   `json:"updatedAt"`
+	CreatedAt string   `json:"createdAt,omitempty"`
+	Pinned    bool     `json:"pinned,omitempty"`
+	Trashed   bool     `json:"trashed,omitempty"`
+	Private   bool     `json:"private,omitempty"`
+	Aliases   []string `json:"aliases,omitempty"`
+	Revision  int      `json:"revision"`
 }
 type Folder struct {
 	ID       string   `json:"id"`
@@ -62,8 +68,47 @@ func openDB() (*sql.DB, error) {
 CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,parent_id TEXT, title TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES folders(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,folder_id TEXT,title TEXT NOT NULL,content TEXT NOT NULL DEFAULT '',position INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS shares(token TEXT PRIMARY KEY,document_id TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS ai_providers(id TEXT PRIMARY KEY,provider TEXT NOT NULL,label TEXT NOT NULL,model TEXT NOT NULL,key_hint TEXT NOT NULL DEFAULT '',base_url TEXT NOT NULL DEFAULT '',is_default INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat_conversations(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS chat_messages(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS capture_tokens(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,label TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,key_hint TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS audio_memos(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,recorded_date TEXT NOT NULL,file_name TEXT NOT NULL,mime_type TEXT NOT NULL,status TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',transcript_document_id TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS sync_configs(notebook_id TEXT PRIMARY KEY,remote_url TEXT NOT NULL,branch TEXT NOT NULL DEFAULT 'main',status TEXT NOT NULL DEFAULT 'disconnected',last_error TEXT NOT NULL DEFAULT '',last_sync_at TEXT NOT NULL DEFAULT '',auto_sync INTEGER NOT NULL DEFAULT 1,credential_account TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(notebook_id,parent_id,position);CREATE INDEX IF NOT EXISTS idx_docs_folder ON documents(notebook_id,folder_id,position);`
-	_, err = db.Exec(schema)
+	if _, err = db.Exec(schema); err != nil {
+		return nil, err
+	}
+	for _, migration := range []string{
+		`ALTER TABLE documents ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE documents ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE documents ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE documents ADD COLUMN private INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE documents ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, migrationErr := db.Exec(migration); migrationErr != nil &&
+			!strings.Contains(strings.ToLower(migrationErr.Error()), "duplicate column") {
+			return nil, migrationErr
+		}
+	}
+	ftsSchema := `CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(document_id UNINDEXED,title,content,tokenize='unicode61');
+CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN
+  INSERT INTO documents_fts(document_id,title,content) VALUES(new.id,new.title,new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE OF title,content ON documents BEGIN
+  DELETE FROM documents_fts WHERE document_id=old.id;
+  INSERT INTO documents_fts(document_id,title,content) VALUES(new.id,new.title,new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS documents_fts_delete AFTER DELETE ON documents BEGIN
+  DELETE FROM documents_fts WHERE document_id=old.id;
+END;
+INSERT INTO documents_fts(document_id,title,content)
+SELECT d.id,d.title,d.content FROM documents d
+WHERE NOT EXISTS(SELECT 1 FROM documents_fts f WHERE f.document_id=d.id);`
+	if _, err = db.Exec(ftsSchema); err != nil {
+		return nil, err
+	}
 	return db, err
 }
 
@@ -110,7 +155,7 @@ func (s *server) loadFolders(book string) ([]Folder, error) {
 		all[x.f.ID] = x
 		order = append(order, x.f.ID)
 	}
-	docs, err := s.db.Query(`SELECT id,folder_id,title,content,updated_at FROM documents WHERE notebook_id=? ORDER BY position`, book)
+	docs, err := s.db.Query(`SELECT id,folder_id,title,content,updated_at,created_at,pinned,trashed,private,aliases_json,revision FROM documents WHERE notebook_id=? ORDER BY position`, book)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +163,16 @@ func (s *server) loadFolders(book string) ([]Folder, error) {
 	for docs.Next() {
 		var d Doc
 		var folder sql.NullString
-		if err = docs.Scan(&d.ID, &folder, &d.Title, &d.Content, &d.UpdatedAt); err != nil {
+		var pinned, trashed, private int
+		var aliasesJSON string
+		if err = docs.Scan(&d.ID, &folder, &d.Title, &d.Content, &d.UpdatedAt, &d.CreatedAt, &pinned, &trashed, &private, &aliasesJSON, &d.Revision); err != nil {
 			return nil, err
+		}
+		d.Pinned = pinned != 0
+		d.Trashed = trashed != 0
+		d.Private = private != 0
+		if json.Unmarshal([]byte(aliasesJSON), &d.Aliases) != nil {
+			d.Aliases = []string{}
 		}
 		if folder.Valid && all[folder.String] != nil {
 			all[folder.String].f.Docs = append(all[folder.String].f.Docs, d)
@@ -151,12 +204,67 @@ func (s *server) loadFolders(book string) ([]Folder, error) {
 }
 func (s *server) save(books []Notebook) error {
 	type shareRow struct{ token, documentID, createdAt string }
+	type templateRow struct{ id, notebookID, title, content, createdAt string }
+	type conversationRow struct{ id, notebookID, title, createdAt, updatedAt string }
+	type messageRow struct{ id, conversationID, role, content, createdAt string }
+	type captureTokenRow struct{ id, notebookID, label, tokenHash, keyHint, createdAt string }
+	type audioMemoRow struct{ id, notebookID, date, fileName, mimeType, status, errorText, transcriptID, createdAt string }
 	shares := []shareRow{}
+	templates := []templateRow{}
+	conversations := []conversationRow{}
+	messages := []messageRow{}
+	captureTokens := []captureTokenRow{}
+	audioMemos := []audioMemoRow{}
 	if rows, e := s.db.Query(`SELECT token,document_id,created_at FROM shares`); e == nil {
 		for rows.Next() {
 			var x shareRow
 			if rows.Scan(&x.token, &x.documentID, &x.createdAt) == nil {
 				shares = append(shares, x)
+			}
+		}
+		rows.Close()
+	}
+	if rows, e := s.db.Query(`SELECT id,notebook_id,title,content,created_at FROM templates`); e == nil {
+		for rows.Next() {
+			var x templateRow
+			if rows.Scan(&x.id, &x.notebookID, &x.title, &x.content, &x.createdAt) == nil {
+				templates = append(templates, x)
+			}
+		}
+		rows.Close()
+	}
+	if rows, e := s.db.Query(`SELECT id,notebook_id,title,created_at,updated_at FROM chat_conversations`); e == nil {
+		for rows.Next() {
+			var x conversationRow
+			if rows.Scan(&x.id, &x.notebookID, &x.title, &x.createdAt, &x.updatedAt) == nil {
+				conversations = append(conversations, x)
+			}
+		}
+		rows.Close()
+	}
+	if rows, e := s.db.Query(`SELECT id,conversation_id,role,content,created_at FROM chat_messages`); e == nil {
+		for rows.Next() {
+			var x messageRow
+			if rows.Scan(&x.id, &x.conversationID, &x.role, &x.content, &x.createdAt) == nil {
+				messages = append(messages, x)
+			}
+		}
+		rows.Close()
+	}
+	if rows, e := s.db.Query(`SELECT id,notebook_id,label,token_hash,key_hint,created_at FROM capture_tokens`); e == nil {
+		for rows.Next() {
+			var x captureTokenRow
+			if rows.Scan(&x.id, &x.notebookID, &x.label, &x.tokenHash, &x.keyHint, &x.createdAt) == nil {
+				captureTokens = append(captureTokens, x)
+			}
+		}
+		rows.Close()
+	}
+	if rows, e := s.db.Query(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos`); e == nil {
+		for rows.Next() {
+			var x audioMemoRow
+			if rows.Scan(&x.id, &x.notebookID, &x.date, &x.fileName, &x.mimeType, &x.status, &x.errorText, &x.transcriptID, &x.createdAt) == nil {
+				audioMemos = append(audioMemos, x)
 			}
 		}
 		rows.Close()
@@ -184,7 +292,12 @@ func (s *server) save(books []Notebook) error {
 					if updated == "" {
 						updated = time.Now().Format(time.RFC3339)
 					}
-					if _, err = tx.Exec(`INSERT INTO documents(id,notebook_id,folder_id,title,content,position,updated_at) VALUES(?,?,?,?,?,?,?)`, d.ID, b.ID, f.ID, d.Title, d.Content, j, updated); err != nil {
+					created := d.CreatedAt
+					if created == "" {
+						created = updated
+					}
+					aliasesJSON, _ := json.Marshal(d.Aliases)
+					if _, err = tx.Exec(`INSERT INTO documents(id,notebook_id,folder_id,title,content,position,updated_at,created_at,pinned,trashed,private,aliases_json,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, d.ID, b.ID, f.ID, d.Title, d.Content, j, updated, created, d.Pinned, d.Trashed, d.Private, string(aliasesJSON), d.Revision); err != nil {
 						return err
 					}
 				}
@@ -202,13 +315,28 @@ func (s *server) save(books []Notebook) error {
 	for _, x := range shares {
 		_, _ = tx.Exec(`INSERT OR IGNORE INTO shares(token,document_id,created_at) VALUES(?,?,?)`, x.token, x.documentID, x.createdAt)
 	}
+	for _, x := range templates {
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO templates(id,notebook_id,title,content,created_at) VALUES(?,?,?,?,?)`, x.id, x.notebookID, x.title, x.content, x.createdAt)
+	}
+	for _, x := range conversations {
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO chat_conversations(id,notebook_id,title,created_at,updated_at) VALUES(?,?,?,?,?)`, x.id, x.notebookID, x.title, x.createdAt, x.updatedAt)
+	}
+	for _, x := range messages {
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO chat_messages(id,conversation_id,role,content,created_at) VALUES(?,?,?,?,?)`, x.id, x.conversationID, x.role, x.content, x.createdAt)
+	}
+	for _, x := range captureTokens {
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO capture_tokens(id,notebook_id,label,token_hash,key_hint,created_at) VALUES(?,?,?,?,?,?)`, x.id, x.notebookID, x.label, x.tokenHash, x.keyHint, x.createdAt)
+	}
+	for _, x := range audioMemos {
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO audio_memos(id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, x.id, x.notebookID, x.date, x.fileName, x.mimeType, x.status, x.errorText, x.transcriptID, x.createdAt)
+	}
 	return tx.Commit()
 }
 func cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,PUT,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
@@ -239,10 +367,133 @@ func (s *server) notebooks(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, e.Error(), 500)
 			return
 		}
-		jsonOut(w, map[string]bool{"ok": true})
+		records, loadErr := s.load()
+		if loadErr != nil {
+			http.Error(w, loadErr.Error(), 500)
+			return
+		}
+		jsonOut(w, records)
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+func (s *server) documentByID(id string) (Doc, error) {
+	var d Doc
+	var pinned, trashed, private int
+	var aliasesJSON string
+	err := s.db.QueryRow(`SELECT id,title,content,updated_at,created_at,pinned,trashed,private,aliases_json,revision FROM documents WHERE id=?`, id).
+		Scan(&d.ID, &d.Title, &d.Content, &d.UpdatedAt, &d.CreatedAt, &pinned, &trashed, &private, &aliasesJSON, &d.Revision)
+	if err != nil {
+		return d, err
+	}
+	d.Pinned = pinned != 0
+	d.Trashed = trashed != 0
+	d.Private = private != 0
+	if json.Unmarshal([]byte(aliasesJSON), &d.Aliases) != nil {
+		d.Aliases = []string{}
+	}
+	return d, nil
+}
+
+func (s *server) document(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/documents/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "document id required", 400)
+		return
+	}
+	switch r.Method {
+	case "GET":
+		d, err := s.documentByID(id)
+		if err == sql.ErrNoRows {
+			http.Error(w, "document not found", 404)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonOut(w, d)
+	case "PUT":
+		var incoming Doc
+		if json.NewDecoder(r.Body).Decode(&incoming) != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		aliasesJSON, _ := json.Marshal(incoming.Aliases)
+		updated := time.Now().Format(time.RFC3339Nano)
+		result, err := s.db.Exec(`UPDATE documents SET title=?,content=?,updated_at=?,pinned=?,trashed=?,private=?,aliases_json=?,revision=revision+1 WHERE id=? AND revision=?`,
+			incoming.Title, incoming.Content, updated, incoming.Pinned, incoming.Trashed, incoming.Private, string(aliasesJSON), id, incoming.Revision)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			current, currentErr := s.documentByID(id)
+			if currentErr == sql.ErrNoRows {
+				http.Error(w, "document not found", 404)
+				return
+			}
+			if currentErr != nil {
+				http.Error(w, currentErr.Error(), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(current)
+			return
+		}
+		current, err := s.documentByID(id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonOut(w, current)
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}
+
+type searchHit struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Snippet   string `json:"snippet"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+func (s *server) search(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	notebookID := r.URL.Query().Get("notebookId")
+	if query == "" {
+		jsonOut(w, []searchHit{})
+		return
+	}
+	terms := strings.Fields(query)
+	for i, term := range terms {
+		terms[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"*`
+	}
+	expression := strings.Join(terms, " AND ")
+	rows, err := s.db.Query(`SELECT d.id,d.title,
+snippet(documents_fts,2,'<mark>','</mark>','…',18),d.updated_at
+FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id
+WHERE documents_fts MATCH ? AND d.trashed=0 AND (?='' OR d.notebook_id=?)
+ORDER BY bm25(documents_fts),d.updated_at DESC LIMIT 30`, expression, notebookID, notebookID)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	defer rows.Close()
+	hits := []searchHit{}
+	for rows.Next() {
+		var hit searchHit
+		if err = rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.UpdatedAt); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		hits = append(hits, hit)
+	}
+	jsonOut(w, hits)
 }
 
 func safeName(s string) string {
@@ -409,8 +660,53 @@ func (s *server) exportMD(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) render(md string) template.HTML {
 	var b bytes.Buffer
-	s.md.Convert([]byte(md), &b)
-	return template.HTML(b.String())
+	s.md.Convert([]byte(prepareImageMetadataForRender(md)), &b)
+	html := renderedImageSizePattern.ReplaceAllString(b.String(), ` width="$1" height="$2" style="width:$1px;height:$2px;max-width:100%;object-fit:contain"`)
+	return template.HTML(html)
+}
+
+var imageMetadataPattern = regexp.MustCompile(`(!\[[^\]\n]*\]\([^\n]*?\))<!--\s*(\{[^}\n]*\})\s*-->`)
+var renderedImageSizePattern = regexp.MustCompile(` title="mdocman-size-(\d+)x(\d+)"`)
+var frontmatterOpenPattern = regexp.MustCompile(`^---[ \t]*\r?\n`)
+var frontmatterClosePattern = regexp.MustCompile(`(?m)^---[ \t]*(?:\r?\n|$)`)
+
+func markdownBody(source string) string {
+	open := frontmatterOpenPattern.FindStringIndex(source)
+	if open == nil {
+		return source
+	}
+	rest := source[open[1]:]
+	close := frontmatterClosePattern.FindStringIndex(rest)
+	if close == nil {
+		return source
+	}
+	return rest[close[1]:]
+}
+
+func prepareImageMetadataForRender(markdown string) string {
+	return imageMetadataPattern.ReplaceAllStringFunc(markdown, func(source string) string {
+		parts := imageMetadataPattern.FindStringSubmatch(source)
+		if len(parts) != 3 {
+			return source
+		}
+		var metadata struct {
+			Width  int    `json:"width"`
+			Height int    `json:"height"`
+			Href   string `json:"href"`
+		}
+		if json.Unmarshal([]byte(parts[2]), &metadata) != nil {
+			return source
+		}
+		image := parts[1]
+		if metadata.Width > 0 && metadata.Height > 0 {
+			image = strings.TrimSuffix(image, ")") + fmt.Sprintf(` "mdocman-size-%dx%d")`, metadata.Width, metadata.Height)
+		}
+		if strings.TrimSpace(metadata.Href) != "" {
+			href := strings.NewReplacer(`\`, `\\`, `(`, `\(`, `)`, `\)`).Replace(strings.TrimSpace(metadata.Href))
+			image = "[" + image + "](" + href + ")"
+		}
+		return image
+	})
 }
 func slug(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -420,6 +716,50 @@ func slug(s string) string {
 
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{{.Title}}</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body)"></script><script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';document.querySelectorAll('code.language-mermaid').forEach(e=>{const p=e.parentElement,d=document.createElement('div');d.className='mermaid';d.textContent=e.textContent;p.replaceWith(d)});mermaid.initialize({startOnLoad:true,theme:'neutral'});</script></head><body><header><a href="/">墨笺</a><nav>{{.Book}}</nav></header><div class="layout">{{if .Sidebar}}<aside><b>目录</b>{{range .Links}}<a {{if eq .URL $.Current}}class="active"{{end}} href="{{.URL}}">{{.Title}}</a>{{end}}</aside>{{end}}<main><article>{{.HTML}}</article></main></div><footer>由 Mdocman 增量生成 · {{.Date}}</footer></body></html>`
 const css = `:root{color:#30332e;background:#faf9f5;font-family:Georgia,"Songti SC",serif}body{margin:0}header{height:64px;border-bottom:1px solid #e5e3dc;display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,calc((100% - 1080px)/2));font-family:system-ui}a{color:#45604a;text-decoration:none}.layout{display:flex;max-width:1080px;margin:0 auto}.layout aside{width:220px;flex:none;padding:70px 24px;border-right:1px solid #e5e3dc;font:13px system-ui}.layout aside b{display:block;margin-bottom:14px}.layout aside a{display:block;padding:7px 9px;border-radius:5px}.layout aside a.active{background:#e4e9e2;font-weight:600}.layout main{width:100%;max-width:820px;margin:70px auto;padding:0 36px;min-height:70vh}article{font-size:18px;line-height:1.9}img{max-width:100%;border-radius:8px}table{border-collapse:collapse;width:100%;display:block;overflow:auto}th,td{border:1px solid #d8d8d2;padding:8px 12px}th{background:#efeee9}pre{background:#282b27;color:#e8e9e5;padding:18px;overflow:auto;border-radius:8px}code{font:14px ui-monospace,monospace}p code{background:#ecebe6;color:#7d4d3a;padding:2px 5px;border-radius:4px}blockquote{border-left:3px solid #78907c;background:#f0f3ed;margin:25px 0;padding:14px 20px}footer{text-align:center;color:#aaa;font:12px system-ui;padding:35px}@media(max-width:760px){.layout aside{display:none}.layout main{padding:0 22px}}`
+
+const previewPage = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><style>{{.CSS}}</style></head><body><div class="layout"><main><article>{{.HTML}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>`
+
+func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/preview/")
+	if id == "" {
+		http.Error(w, "document id required", http.StatusBadRequest)
+		return
+	}
+	var title, content, book string
+	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid preview", http.StatusBadRequest)
+			return
+		}
+		title = strings.TrimSpace(r.FormValue("title"))
+		content = r.FormValue("content")
+		book = strings.TrimSpace(r.FormValue("book"))
+	} else if r.Method == http.MethodGet {
+		err := s.db.QueryRow(`SELECT d.title,d.content,n.title FROM documents d JOIN notebooks n ON n.id=d.notebook_id WHERE d.id=? AND d.trashed=0`, id).Scan(&title, &content, &book)
+		if err == sql.ErrNoRows {
+			http.Error(w, "document not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if title == "" {
+		title = "未命名笔记"
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+	t := template.Must(template.New("preview").Parse(previewPage))
+	if err := t.Execute(w, map[string]any{"Title": title, "HTML": s.render(markdownBody(content)), "CSS": template.CSS(css)}); err != nil {
+		log.Printf("preview render: %v", err)
+	}
+}
 
 type buildManifest struct {
 	Sidebar bool              `json:"sidebar"`
@@ -599,17 +939,40 @@ func main() {
 	defer db.Close()
 	s := &server{db: db, md: goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote, extension.Typographer), goldmark.WithParserOptions(parser.WithAutoHeadingID()))}
 	migrateJSON(s)
+	if cliRequested(s) {
+		return
+	}
 	port := os.Getenv("API_PORT")
 	if port == "" {
 		port = "8080"
 	}
 	http.HandleFunc("/api/notebooks", cors(s.notebooks))
+	http.HandleFunc("/api/documents/", cors(s.document))
+	http.HandleFunc("/api/search", cors(s.search))
+	http.HandleFunc("/api/ai/providers", cors(s.aiProviders))
+	http.HandleFunc("/api/ai/providers/", cors(s.aiProvider))
+	http.HandleFunc("/api/ai/transform", cors(s.aiTransform))
+	http.HandleFunc("/api/ai/chat", cors(s.aiChat))
+	http.HandleFunc("/api/ai/conversations", cors(s.aiConversations))
+	http.HandleFunc("/api/ai/conversations/", cors(s.aiConversation))
+	http.HandleFunc("/api/templates", cors(s.templates))
+	http.HandleFunc("/api/templates/", cors(s.template))
+	http.HandleFunc("/api/capture/tokens", cors(s.captureTokens))
+	http.HandleFunc("/api/capture/tokens/", cors(s.captureToken))
+	http.HandleFunc("/api/capture", cors(s.capture))
+	http.HandleFunc("/api/audio-memos", cors(s.audioMemos))
+	http.HandleFunc("/api/audio-memos/", cors(s.audioMemo))
+	http.HandleFunc("/api/sync", cors(s.syncSettings))
+	http.HandleFunc("/api/sync/run", cors(s.syncRun))
+	http.HandleFunc("/api/assets/describe", cors(s.describeAssets))
+	http.HandleFunc("/api/preview/", cors(s.previewDocument))
 	http.HandleFunc("/api/upload", cors(s.upload))
 	http.HandleFunc("/api/import", cors(s.importMD))
 	http.HandleFunc("/api/export", cors(s.exportMD))
 	http.HandleFunc("/api/build", cors(s.build))
 	http.HandleFunc("/api/share", cors(s.share))
 	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("data/uploads"))))
+	http.Handle("/audio/", http.StripPrefix("/audio/", http.FileServer(http.Dir("data/audio-memos"))))
 	http.Handle("/site/", http.StripPrefix("/site/", http.FileServer(http.Dir("public-site"))))
 	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
 	fmt.Printf("Mdocman API: http://localhost:%s\n", port)

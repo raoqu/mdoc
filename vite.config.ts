@@ -10,6 +10,8 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const usePollingForHmr =
+  process.env.MDOC_DEV_HMR === "1" || isCodexSeatbeltSandbox;
 
 const localBindingConfig = {
   main: "./worker/index.ts",
@@ -46,8 +48,9 @@ export default defineConfig(async () => {
 
   return {
     server: {
-      ...(isCodexSeatbeltSandbox
-        ? { watch: { useFsEvents: false, usePolling: true } }
+      hmr: true,
+      ...(usePollingForHmr
+        ? { watch: { usePolling: true, interval: 100 } }
         : {}),
       proxy: {
         "/api": {

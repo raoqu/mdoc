@@ -1,0 +1,24 @@
+{
+  "name": "墨笺 · 关联式 Markdown 笔记",
+  "short_name": "墨笺",
+  "description": "每日笔记、双向链接、任务与本地优先的 Markdown 知识库",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f3ec",
+  "theme_color": "#6d5bd0",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "今日笔记", "short_name": "今日", "url": "/?view=daily" },
+    { "name": "新建笔记", "short_name": "新建", "url": "/?action=new" },
+    { "name": "任务", "short_name": "任务", "url": "/?view=tasks" }
+  ]
+}

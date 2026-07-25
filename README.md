@@ -6,7 +6,7 @@
 
 ## 开发
 
-需要 Go 1.22+、Node.js 22+。
+需要 Go 1.22+、Node.js 22+、pnpm 11+。
 
 ```bash
 ./dev.sh
@@ -39,6 +39,8 @@ DEPLOY_TARGET=user@host:/var/www/notes ./deploy.sh
 
 数据库结构和数据流参见 [docs/architecture.md](docs/architecture.md)。
 完整操作说明参见 [docs/使用说明.md](docs/使用说明.md)。
+Reflect Open 的功能迁移状态参见
+[docs/reflect-open-迁移.md](docs/reflect-open-%E8%BF%81%E7%A7%BB.md)。
 
 ## 静态发布
 
