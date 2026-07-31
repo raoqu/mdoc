@@ -7,6 +7,8 @@ flowchart LR
     UI[TypeScript 管理界面] -->|REST /api| Admin[mdocman-admin 管理端]
     UI -->|选择/新建| Registry[(~/.mdoc/*.db)]
     Admin --> Registry
+    Admin -->|本地句向量 / 混合 RAG| Semantic[(semantic_chunks)]
+    Semantic --> Registry
     UI -->|图片上传| Assets[~/.mdoc/uploads]
     Admin -->|内容哈希增量生成| Static[public-site 静态文件]
     Static --> Site[mdocman-site 只读发布端]

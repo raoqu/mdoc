@@ -171,7 +171,27 @@ function loadSettings(): WorkspaceSettings {
     if (!raw) {
       return DEFAULT_SETTINGS;
     }
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<WorkspaceSettings>) };
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      ...(JSON.parse(raw) as Partial<WorkspaceSettings>),
+    };
+    const selection = settings.chatModelSelection;
+    return {
+      ...settings,
+      semanticSearchEnabled: settings.semanticSearchEnabled === true,
+      chatSystemPrompt:
+        typeof settings.chatSystemPrompt === "string"
+          ? settings.chatSystemPrompt.trim().slice(0, 20_000)
+          : "",
+      chatModelSelection:
+        selection &&
+        typeof selection.configId === "string" &&
+        selection.configId &&
+        typeof selection.modelId === "string" &&
+        selection.modelId
+          ? selection
+          : null,
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -645,6 +665,20 @@ export function ReflectWorkspace() {
       JSON.stringify(settings),
     );
   }, [settings]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const controller = new AbortController();
+    void fetch("/api/semantic", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ enabled: settings.semanticSearchEnabled }),
+    }).catch(() => {
+      // The local backend may be restarting while the browser keeps its state.
+    });
+    return () => controller.abort();
+  }, [loaded, settings.semanticSearchEnabled]);
 
   const mutateNotebooks = useCallback(
     (
@@ -1841,7 +1875,15 @@ export function ReflectWorkspace() {
       </section>
       <AiSettings
         providers={aiProviders}
+        chatSystemPrompt={settings.chatSystemPrompt}
+        semanticSearchEnabled={settings.semanticSearchEnabled}
         onChange={setAiProviders}
+        onChatSystemPromptChange={(chatSystemPrompt) =>
+          setSettings((current) => ({ ...current, chatSystemPrompt }))
+        }
+        onSemanticSearchChange={(semanticSearchEnabled) =>
+          setSettings((current) => ({ ...current, semanticSearchEnabled }))
+        }
         onNotice={toast}
       />
       <section>
@@ -1912,14 +1954,27 @@ export function ReflectWorkspace() {
   } else if (view.kind === "chat") {
     content = (
       <ChatScreen
+        key={notebook.id}
         notebookId={notebook.id}
         initialConversationId={view.conversationId}
         providers={aiProviders}
+        modelSelection={settings.chatModelSelection}
+        chatSystemPrompt={settings.chatSystemPrompt}
+        semanticSearchEnabled={settings.semanticSearchEnabled}
         documents={documents}
         onOpenDocument={(documentId) =>
           navigate({ kind: "note", documentId })
         }
+        onOpenDocumentInNewWindow={(documentId) => {
+          const url = new URL(window.location.origin);
+          url.searchParams.set("view", "note");
+          url.searchParams.set("target", documentId);
+          window.open(url, "_blank", "noopener,noreferrer");
+        }}
         onConfigureAI={() => navigate({ kind: "settings" })}
+        onModelSelectionChange={(chatModelSelection) =>
+          setSettings((current) => ({ ...current, chatModelSelection }))
+        }
         onConversationChange={(conversationId) => {
           const next: WorkspaceView = { kind: "chat", conversationId };
           setHistory((items) =>

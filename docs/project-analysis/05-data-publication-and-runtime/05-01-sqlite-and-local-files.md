@@ -28,6 +28,7 @@
 | `folders` | 递归目录和排序 |
 | `documents` | Markdown、元数据、revision |
 | `documents_fts` + triggers | 标题/正文全文索引 |
+| `semantic_documents/chunks` | 文档内容哈希、约 1,000 字符分块和本地句向量 |
 | `shares` | 文档到分享 token |
 | `ai_providers` | 非秘密的 AI 配置 |
 | `chat_conversations/messages` | 对话历史 |
@@ -51,14 +52,16 @@
 → 读取 workspace.json
 → 选择或创建活动 .db
 → openDBAt
-→ schema + 列迁移 + FTS5
+→ schema + 列迁移 + FTS5 + 语义分块表
 ```
 
 `databaseManager` 缓存已打开数据库连接，切换时更新 `workspace.json`，进程退出时统一关闭。
 
 ## 8. 依赖关系
 
-上游是所有 Go 业务模块；下游是 `modernc.org/sqlite`、用户目录、文件权限和 SQLite FTS5。Keychain 与数据库只通过 provider ID 或 credential account 字符串关联。
+上游是所有 Go 业务模块；下游是 `modernc.org/sqlite`、用户目录、文件权限、
+SQLite FTS5 和平台句向量。Keychain 与数据库只通过 provider ID 或 credential
+account 字符串关联。
 
 ## 9. 配置项
 
@@ -67,6 +70,8 @@
 - SQLite DSN 启用 `foreign_keys(1)` 与 `journal_mode(WAL)`。
 - 上传：`~/.mdoc/uploads/`；音频：`~/.mdoc/audio-memos/`。
 - Git 工作副本：`data/sync/`；静态站点：`public-site/`，后二者相对当前工作目录。
+- 语义向量以归一化 `float32` 小端 BLOB 保存；macOS 模型 ID 包含语言与系统
+  revision，关闭语义检索只暂停使用和增量工作，不删除已有本地索引。
 
 ## 10. 错误处理
 
@@ -103,4 +108,3 @@ main
 | `cmd/mdocman/workspace_databases.go` | `migrateLegacyWorkspace` | 旧 `data/` 迁移 |
 | `cmd/mdocman/workspace_databases.go` | `copySQLiteSnapshot` | 一致数据库快照 |
 | `cmd/mdocman/workspace_databases_test.go` | 管理器与迁移测试 | 文件、切换和迁移验证 |
-

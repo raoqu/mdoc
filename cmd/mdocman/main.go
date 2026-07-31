@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuin/goldmark"
@@ -52,10 +53,12 @@ type Notebook struct {
 	Folders     []Folder `json:"folders"`
 }
 type server struct {
-	db        *sql.DB
-	databases *databaseManager
-	dataDir   string
-	md        goldmark.Markdown
+	db           *sql.DB
+	databases    *databaseManager
+	dataDir      string
+	md           goldmark.Markdown
+	semanticOnce sync.Once
+	semantic     *semanticService
 }
 
 func openDBAt(databasePath string) (*sql.DB, error) {
@@ -72,12 +75,18 @@ CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,notebook_id TEXT NOT NU
 CREATE TABLE IF NOT EXISTS shares(token TEXT PRIMARY KEY,document_id TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS ai_providers(id TEXT PRIMARY KEY,provider TEXT NOT NULL,label TEXT NOT NULL,model TEXT NOT NULL,key_hint TEXT NOT NULL DEFAULT '',base_url TEXT NOT NULL DEFAULT '',is_default INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat_conversations(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS chat_messages(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS chat_messages(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,attachments_json TEXT NOT NULL DEFAULT '[]',sources_json TEXT NOT NULL DEFAULT '[]',tools_json TEXT NOT NULL DEFAULT '[]',context_json TEXT NOT NULL DEFAULT '[]',FOREIGN KEY(conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS semantic_documents(document_id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,content_hash TEXT NOT NULL,index_version TEXT NOT NULL,indexed_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS semantic_chunks(id INTEGER PRIMARY KEY AUTOINCREMENT,document_id TEXT NOT NULL,notebook_id TEXT NOT NULL,heading TEXT NOT NULL DEFAULT '',pos_from INTEGER NOT NULL,pos_to INTEGER NOT NULL,text TEXT NOT NULL,content_hash TEXT NOT NULL,model_id TEXT NOT NULL,language TEXT NOT NULL,vector BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS capture_tokens(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,label TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,key_hint TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS audio_memos(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,recorded_date TEXT NOT NULL,file_name TEXT NOT NULL,mime_type TEXT NOT NULL,status TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',transcript_document_id TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS sync_configs(notebook_id TEXT PRIMARY KEY,remote_url TEXT NOT NULL,branch TEXT NOT NULL DEFAULT 'main',status TEXT NOT NULL DEFAULT 'disconnected',last_error TEXT NOT NULL DEFAULT '',last_sync_at TEXT NOT NULL DEFAULT '',auto_sync INTEGER NOT NULL DEFAULT 1,credential_account TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(notebook_id,parent_id,position);CREATE INDEX IF NOT EXISTS idx_docs_folder ON documents(notebook_id,folder_id,position);`
+CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(notebook_id,parent_id,position);
+CREATE INDEX IF NOT EXISTS idx_docs_folder ON documents(notebook_id,folder_id,position);
+CREATE INDEX IF NOT EXISTS idx_semantic_documents_notebook ON semantic_documents(notebook_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_chunks_search ON semantic_chunks(notebook_id,model_id,language);
+CREATE INDEX IF NOT EXISTS idx_semantic_chunks_document ON semantic_chunks(document_id);`
 	if _, err = db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -89,6 +98,10 @@ CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(notebook_id,parent_id,po
 		`ALTER TABLE documents ADD COLUMN private INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE documents ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_messages ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE chat_messages ADD COLUMN tools_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE chat_messages ADD COLUMN context_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`,
 	} {
 		if _, migrationErr := db.Exec(migration); migrationErr != nil &&
 			!strings.Contains(strings.ToLower(migrationErr.Error()), "duplicate column") {
@@ -235,7 +248,10 @@ func (s *server) save(books []Notebook) error {
 	type shareRow struct{ token, documentID, createdAt string }
 	type templateRow struct{ id, notebookID, title, content, createdAt string }
 	type conversationRow struct{ id, notebookID, title, createdAt, updatedAt string }
-	type messageRow struct{ id, conversationID, role, content, createdAt string }
+	type messageRow struct {
+		id, conversationID, role, content, createdAt         string
+		attachmentsJSON, sourcesJSON, toolsJSON, contextJSON string
+	}
 	type captureTokenRow struct{ id, notebookID, label, tokenHash, keyHint, createdAt string }
 	type audioMemoRow struct{ id, notebookID, date, fileName, mimeType, status, errorText, transcriptID, createdAt string }
 	shares := []shareRow{}
@@ -271,10 +287,10 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	if rows, e := s.database().Query(`SELECT id,conversation_id,role,content,created_at FROM chat_messages`); e == nil {
+	if rows, e := s.database().Query(`SELECT id,conversation_id,role,content,created_at,attachments_json,sources_json,tools_json,context_json FROM chat_messages`); e == nil {
 		for rows.Next() {
 			var x messageRow
-			if rows.Scan(&x.id, &x.conversationID, &x.role, &x.content, &x.createdAt) == nil {
+			if rows.Scan(&x.id, &x.conversationID, &x.role, &x.content, &x.createdAt, &x.attachmentsJSON, &x.sourcesJSON, &x.toolsJSON, &x.contextJSON) == nil {
 				messages = append(messages, x)
 			}
 		}
@@ -351,7 +367,7 @@ func (s *server) save(books []Notebook) error {
 		_, _ = tx.Exec(`INSERT OR IGNORE INTO chat_conversations(id,notebook_id,title,created_at,updated_at) VALUES(?,?,?,?,?)`, x.id, x.notebookID, x.title, x.createdAt, x.updatedAt)
 	}
 	for _, x := range messages {
-		_, _ = tx.Exec(`INSERT OR IGNORE INTO chat_messages(id,conversation_id,role,content,created_at) VALUES(?,?,?,?,?)`, x.id, x.conversationID, x.role, x.content, x.createdAt)
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO chat_messages(id,conversation_id,role,content,created_at,attachments_json,sources_json,tools_json,context_json) VALUES(?,?,?,?,?,?,?,?,?)`, x.id, x.conversationID, x.role, x.content, x.createdAt, x.attachmentsJSON, x.sourcesJSON, x.toolsJSON, x.contextJSON)
 	}
 	for _, x := range captureTokens {
 		_, _ = tx.Exec(`INSERT OR IGNORE INTO capture_tokens(id,notebook_id,label,token_hash,key_hint,created_at) VALUES(?,?,?,?,?,?)`, x.id, x.notebookID, x.label, x.tokenHash, x.keyHint, x.createdAt)
@@ -359,7 +375,11 @@ func (s *server) save(books []Notebook) error {
 	for _, x := range audioMemos {
 		_, _ = tx.Exec(`INSERT OR IGNORE INTO audio_memos(id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, x.id, x.notebookID, x.date, x.fileName, x.mimeType, x.status, x.errorText, x.transcriptID, x.createdAt)
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.semanticRuntime().requestRebuild(s.database(), s.uploadsDir(), false)
+	return nil
 }
 func cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -478,6 +498,7 @@ func (s *server) document(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		s.semanticRuntime().requestRebuild(s.database(), s.uploadsDir(), false)
 		jsonOut(w, current)
 	default:
 		http.Error(w, "method not allowed", 405)
@@ -1004,6 +1025,7 @@ func main() {
 	http.HandleFunc("/api/ai/chat", cors(s.aiChat))
 	http.HandleFunc("/api/ai/conversations", cors(s.aiConversations))
 	http.HandleFunc("/api/ai/conversations/", cors(s.aiConversation))
+	http.HandleFunc("/api/semantic", cors(s.semanticSettings))
 	http.HandleFunc("/api/templates", cors(s.templates))
 	http.HandleFunc("/api/templates/", cors(s.template))
 	http.HandleFunc("/api/capture/tokens", cors(s.captureTokens))

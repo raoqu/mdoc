@@ -18,32 +18,127 @@ export interface AiPrompt {
   mode: "replace" | "append";
 }
 
+export interface AiModelOption {
+  id: string;
+  label: string;
+  contextWindow: number;
+}
+
+export interface ChatModelSelection {
+  configId: string;
+  modelId: string;
+}
+
 export const AI_PROVIDER_CATALOG = [
   {
     id: "openai" as const,
     label: "OpenAI",
     keyPlaceholder: "sk-…",
-    models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.4", "gpt-5.4-mini"],
+    models: [
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", contextWindow: 1_000_000 },
+      { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", contextWindow: 1_000_000 },
+      { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", contextWindow: 1_000_000 },
+      { id: "gpt-5.5", label: "GPT-5.5", contextWindow: 1_000_000 },
+      { id: "gpt-5.4", label: "GPT-5.4", contextWindow: 1_000_000 },
+      { id: "gpt-5.4-mini", label: "GPT-5.4 mini", contextWindow: 400_000 },
+      { id: "gpt-5.4-nano", label: "GPT-5.4 nano", contextWindow: 400_000 },
+    ],
   },
   {
     id: "anthropic" as const,
     label: "Anthropic",
     keyPlaceholder: "sk-ant-…",
-    models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6"],
+    models: [
+      { id: "claude-fable-5", label: "Claude Fable 5", contextWindow: 1_000_000 },
+      { id: "claude-opus-4-8", label: "Claude Opus 4.8", contextWindow: 1_000_000 },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5", contextWindow: 1_000_000 },
+      { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", contextWindow: 1_000_000 },
+      { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", contextWindow: 200_000 },
+    ],
   },
   {
     id: "google" as const,
     label: "Google Gemini",
     keyPlaceholder: "AIza…",
-    models: ["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-2.5-pro"],
+    models: [
+      { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", contextWindow: 1_000_000 },
+      { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash", contextWindow: 1_000_000 },
+      { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite", contextWindow: 1_000_000 },
+      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", contextWindow: 1_000_000 },
+    ],
   },
   {
     id: "openrouter" as const,
     label: "OpenRouter",
     keyPlaceholder: "sk-or-v1-…",
-    models: ["openrouter/auto", "~openai/gpt-latest", "~anthropic/claude-sonnet-latest"],
+    models: [
+      { id: "openrouter/auto", label: "Auto Router", contextWindow: 128_000 },
+      { id: "~openai/gpt-latest", label: "OpenAI GPT Latest", contextWindow: 128_000 },
+      { id: "~anthropic/claude-sonnet-latest", label: "Claude Sonnet Latest", contextWindow: 128_000 },
+      { id: "openai/gpt-5.2", label: "GPT-5.2", contextWindow: 400_000 },
+    ],
   },
 ] as const;
+
+export interface ChatModelOption {
+  configId: string;
+  provider: AiProviderId;
+  modelId: string;
+  label: string;
+  groupLabel: string;
+}
+
+export function chatModelOptions(
+  providers: readonly AiProviderConfig[],
+): ChatModelOption[] {
+  return providers.flatMap((entry) => {
+    const provider = AI_PROVIDER_CATALOG.find(
+      (candidate) => candidate.id === entry.provider,
+    )!;
+    const models: readonly AiModelOption[] = provider.models.some(
+      (model) => model.id === entry.model,
+    )
+      ? provider.models
+      : [
+          ...provider.models,
+          {
+            id: entry.model,
+            label: entry.model,
+            contextWindow: 128_000,
+          },
+        ];
+    const duplicate =
+      providers.filter((candidate) => candidate.provider === entry.provider)
+        .length > 1;
+    return models.map((model) => ({
+      configId: entry.id,
+      provider: entry.provider,
+      modelId: model.id,
+      label: model.label,
+      groupLabel:
+        duplicate && entry.keyHint
+          ? `${provider.label} · ${entry.keyHint}`
+          : provider.label,
+    }));
+  });
+}
+
+export function resolveChatModel(
+  providers: readonly AiProviderConfig[],
+  selection: ChatModelSelection | null,
+): { provider: AiProviderConfig; modelId: string } | null {
+  if (selection) {
+    const provider = providers.find(
+      (candidate) => candidate.id === selection.configId,
+    );
+    if (provider) {
+      return { provider, modelId: selection.modelId };
+    }
+  }
+  const provider =
+    providers.find((candidate) => candidate.isDefault) ?? providers[0];
+  return provider ? { provider, modelId: provider.model } : null;
+}
 
 const FILLER =
   "不要给结果加引号，不要翻译原文。保留原始 Markdown 格式，包括 [[双链]] 和 #标签。只返回处理后的文本。";
@@ -118,11 +213,21 @@ export const BUILT_IN_AI_PROMPTS: readonly AiPrompt[] = [
 ];
 
 export interface AiStreamEvent {
-  type: "start" | "text-delta" | "complete" | "error";
+  type:
+    | "start"
+    | "text-delta"
+    | "tool-call"
+    | "tool-result"
+    | "complete"
+    | "error";
   text?: string;
   message?: string;
   conversationId?: string;
   sources?: { id: string; title: string }[];
+  toolCallId?: string;
+  tool?: string;
+  input?: Record<string, unknown>;
+  summary?: string;
 }
 
 export async function consumeEventStream(

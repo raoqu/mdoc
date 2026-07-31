@@ -31,6 +31,57 @@ import {
   weekdayLabels,
 } from "../app/reflect/month-grid";
 import { normalizeLinkedImages } from "../app/reflect/reflect-editor";
+import {
+  chatModelOptions,
+  resolveChatModel,
+  type AiProviderConfig,
+} from "../app/reflect/ai";
+import { interleaveChatTools } from "../app/reflect/chat-transcript";
+
+test("chat model options expose every curated model per configured key", () => {
+  const providers: AiProviderConfig[] = [
+    {
+      id: "openai-key",
+      provider: "openai",
+      label: "OpenAI",
+      model: "custom-model",
+      keyHint: "••••1234",
+      isDefault: true,
+      createdAt: "2026-07-31T00:00:00Z",
+    },
+  ];
+  const options = chatModelOptions(providers);
+  assert.equal(options.some((option) => option.modelId === "gpt-5.6-sol"), true);
+  assert.equal(options.some((option) => option.modelId === "custom-model"), true);
+  assert.deepEqual(
+    resolveChatModel(providers, {
+      configId: "openai-key",
+      modelId: "gpt-5.4-mini",
+    }),
+    { provider: providers[0], modelId: "gpt-5.4-mini" },
+  );
+  assert.equal(
+    resolveChatModel(providers, {
+      configId: "removed-key",
+      modelId: "missing",
+    })?.modelId,
+    "custom-model",
+  );
+});
+
+test("chat transcript preserves text around tool activity", () => {
+  const search = { toolCallId: "search", textOffset: 6 };
+  const read = { toolCallId: "read", textOffset: 6 };
+  assert.deepEqual(
+    interleaveChatTools("Before answer", [search, read]),
+    [
+      { kind: "text", text: "Before" },
+      { kind: "tool", activity: search },
+      { kind: "tool", activity: read },
+      { kind: "text", text: " answer" },
+    ],
+  );
+});
 
 test("frontmatter remains byte-identical when only the body changes", () => {
   const source =

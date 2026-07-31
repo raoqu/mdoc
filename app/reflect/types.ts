@@ -53,6 +53,9 @@ export interface WorkspaceSettings {
   editorWidth: "reading" | "wide";
   textSize: "small" | "medium" | "large";
   describeAssets: boolean;
+  semanticSearchEnabled: boolean;
+  chatModelSelection: { configId: string; modelId: string } | null;
+  chatSystemPrompt: string;
 }
 
 export const DEFAULT_SETTINGS: WorkspaceSettings = {
@@ -63,6 +66,9 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   editorWidth: "reading",
   textSize: "medium",
   describeAssets: true,
+  semanticSearchEnabled: false,
+  chatModelSelection: null,
+  chatSystemPrompt: "",
 };
 
 export function documentsInFolders(

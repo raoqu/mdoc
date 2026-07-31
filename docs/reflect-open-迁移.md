@@ -51,11 +51,11 @@ Reflect 的用户能力完整落到现有 Go、SQLite、React/Vinext 架构中�
 | 重命名链接重写 | 已迁移 | 800ms 标题静默期、别名 frontmatter 落盘和全图链接更新 |
 | 全局命令面板 | 已迁移 | ⌘K 搜索笔记与执行常用命令 |
 | 词法搜索 | 已迁移 | SQLite FTS5、前缀匹配、摘要和命令面板相关性排序 |
-| 语义搜索 | 阻塞 | Reflect 使用约 90MB 的 `all-MiniLM-L6-v2` 本机模型；当前环境未批准新增 Transformers/ONNX 依赖 |
+| 语义搜索 | 已迁移（macOS） | 系统 Natural Language 句向量、约 1,000 字符分块、内容哈希增量索引、附件描述入索引和 FTS5 + 语义 RRF；其他平台明确降级为词法检索 |
 | 任务 | 已迁移 | `+ [ ]` 汇总、完成切换、日期识别 |
 | 任务高级操作 | 已迁移 | 逾期/今日/未来/未安排分组、完成、改期和列表面包屑 |
 | AI 选择菜单 | 已迁移 | 内置/临时提示、四供应商流式输出、暂存预览、接受/丢弃/重试、私密笔记无入口 |
-| AI Chat | 部分迁移 | BYOK、多供应商、持久历史、FTS 知识库接地、来源跳转和私密硬阻断；模型原生多轮工具调用待补 |
+| AI Chat | 已迁移 | BYOK、供应商全模型选择、自定义系统提示词、图片消息、六小时内恢复最近会话、桌面/移动历史、Markdown 回复、模型原生多轮只读工具、词法/语义混合 RAG、来源跳转和私密硬阻断 |
 | 音频备忘 | 已迁移 | MediaRecorder、波形、原始音频优先落盘、BYOK 转写、每日笔记和重试 |
 | 浏览器链接捕获 | 已迁移 | 配对令牌、Chrome 扩展、离线队列、重试、选区/截图和幂等去重 |
 | 日历与会议 | 平台差异 | Reflect 直接绑定 Apple EventKit；当前 Go/Web 版没有原生权限宿主，尚未提供等价能力 |
@@ -96,6 +96,11 @@ Reflect 的用户能力完整落到现有 Go、SQLite、React/Vinext 架构中�
 使用系统 Git 进程实现，而非 Reflect 的 Rust Git 层；凭据仍只进入系统钥匙串和
 进程环境，不写入仓库或数据库明文。
 
-当前尚不能称为逐项完整迁移：本机语义模型依赖未获安装授权；Apple Calendar 与
-Contacts 依赖 EventKit/CNContactStore 原生权限宿主，Go/Web 运行形态没有等价接口。
-此外 AI Chat 已实现本地检索接地，但还不是 Reflect 规划中的模型原生多轮工具循环。
+当前尚不能称为整个 Reflect 产品的逐项完整迁移：Apple Calendar 与 Contacts
+依赖 EventKit/CNContactStore 原生权限宿主，Go/Web 运行形态没有等价接口；非
+macOS 构建也没有系统 Natural Language 句向量，会保持可用的 FTS5 词法检索。
+AI Chat 已迁入 `search_notes`、`read_notes`、`list_recent_notes`、
+`list_daily_notes` 和 `read_assets` 的模型原生多轮工具循环。启用本地语义检索时，
+`search_notes` 用 FTS5 与系统句向量做 reciprocal-rank fusion；关闭、索引中或平台
+不支持时明确退回词法模式。图片消息会缩放后按四家供应商的原生多模态格式发送并
+随会话保存。

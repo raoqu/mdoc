@@ -313,6 +313,9 @@ func (s *server) describeAssets(w http.ResponseWriter, r *http.Request) {
 			outcome.Described++
 		}
 	}
+	if outcome.Described > 0 {
+		s.semanticRuntime().requestRebuild(s.database(), s.uploadsDir(), false)
+	}
 	jsonOut(w, outcome)
 }
 

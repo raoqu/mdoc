@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,33 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+func TestOpenDBMigratesLegacyChatMessageMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-chat.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = legacy.Exec(`CREATE TABLE chat_messages(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);
+INSERT INTO chat_messages(id,conversation_id,role,content,created_at) VALUES('message','conversation','user','hello','2026-07-31T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := openDBAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var attachments, sources, tools, context string
+	if err = database.QueryRow(`SELECT attachments_json,sources_json,tools_json,context_json FROM chat_messages WHERE id='message'`).Scan(&attachments, &sources, &tools, &context); err != nil {
+		t.Fatal(err)
+	}
+	if attachments != "[]" || sources != "[]" || tools != "[]" || context != "[]" {
+		t.Fatalf("migrated metadata = %q, %q, %q, %q", attachments, sources, tools, context)
+	}
+}
 
 func TestDatabaseManagerCreatesSwitchesAndRemembersDatabase(t *testing.T) {
 	directory := t.TempDir()
