@@ -19,9 +19,10 @@ import (
 )
 
 type pathPreviewServer struct {
-	root  string
-	entry string
-	md    goldmark.Markdown
+	root          string
+	entry         string
+	directoryMode bool
+	md            goldmark.Markdown
 }
 
 type pathPreviewEntry struct {
@@ -30,8 +31,16 @@ type pathPreviewEntry struct {
 	IsDir bool
 }
 
-const pathPreviewDirectoryPage = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><style>{{.CSS}}
-.directory-list{list-style:none;padding:0}.directory-list li{border-bottom:1px solid #e5e3dc}.directory-list a{display:block;padding:10px 4px}.directory-list a:hover{background:#f0f3ed}</style></head><body><div class="layout"><main><article><h1>{{.Title}}</h1><ul class="directory-list">{{range .Entries}}<li><a href="{{.URL}}">{{if .IsDir}}📁 {{else}}📄 {{end}}{{.Name}}</a></li>{{else}}<li>此目录中没有 Markdown 文件。</li>{{end}}</ul></article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>`
+type pathPreviewTreeNode struct {
+	Name     string
+	URL      string
+	IsDir    bool
+	Active   bool
+	Children []pathPreviewTreeNode
+}
+
+const pathPreviewPage = `<!doctype html><html lang="zh-CN" data-preview-theme="default"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><link rel="stylesheet" href="/_mdoc/themes/default.css"><link id="preview-theme-stylesheet" rel="stylesheet" href="/_mdoc/themes/default.css"><script defer src="/_mdoc/preview-theme.js"></script><script type="module" src="/_mdoc/preview-mermaid.js"></script></head><body>` + previewThemeMenu + `<div class="layout">{{if .ShowTree}}<aside class="path-tree"><b class="path-tree-title" title="{{.RootTitle}}">{{.RootTitle}}</b>{{template "tree" .Tree}}</aside>{{end}}<main><article>{{if .Directory}}<h1>{{.Title}}</h1><ul class="directory-list">{{range .Entries}}<li><a href="{{.URL}}">{{if .IsDir}}📁 {{else}}📄 {{end}}{{.Name}}</a></li>{{else}}<li>此目录中没有 Markdown 文件。</li>{{end}}</ul>{{else}}{{.HTML}}{{end}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>
+{{define "tree"}}<ul>{{range .}}{{if .IsDir}}<li><details open><summary>{{.Name}}</summary>{{template "tree" .Children}}</details></li>{{else}}<li><a href="{{.URL}}"{{if .Active}} class="active" aria-current="page"{{end}}>{{.Name}}</a></li>{{end}}{{end}}</ul>{{end}}`
 
 func pathPreviewArgument(args []string) (string, bool) {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
@@ -61,6 +70,7 @@ func newPathPreviewServer(target string, md goldmark.Markdown) (*pathPreviewServ
 
 	root := absolute
 	entry := ""
+	directoryMode := info.IsDir()
 	if !info.IsDir() {
 		if !isMarkdownPath(absolute) {
 			return nil, fmt.Errorf("%q 不是 Markdown 文件", target)
@@ -68,10 +78,14 @@ func newPathPreviewServer(target string, md goldmark.Markdown) (*pathPreviewServ
 		root = filepath.Dir(absolute)
 		entry = filepath.Base(absolute)
 	}
-	return &pathPreviewServer{root: root, entry: entry, md: md}, nil
+	return &pathPreviewServer{root: root, entry: entry, directoryMode: directoryMode, md: md}, nil
 }
 
 func (p *pathPreviewServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, previewAssetsPrefix) {
+		servePreviewAsset(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -141,7 +155,10 @@ func (p *pathPreviewServer) renderMarkdownFile(w http.ResponseWriter, filename s
 	}
 	title := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
 	renderer := &server{md: p.md}
-	writePreviewPage(w, title, renderer.render(markdownBody(string(content))))
+	p.writePage(w, pathPreviewPageData{
+		Title: title,
+		HTML:  renderer.render(markdownBody(string(content))),
+	}, filename)
 }
 
 func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, directory, requestPath string) {
@@ -172,13 +189,95 @@ func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, directory, re
 	if requestPath == "/" {
 		title = filepath.Base(p.root)
 	}
+	p.writePage(w, pathPreviewPageData{
+		Title:     title,
+		Directory: true,
+		Entries:   entries,
+	}, "")
+}
+
+type pathPreviewPageData struct {
+	Title     string
+	RootTitle string
+	HTML      template.HTML
+	Themes    []previewTheme
+	ShowTree  bool
+	Directory bool
+	Entries   []pathPreviewEntry
+	Tree      []pathPreviewTreeNode
+}
+
+func (p *pathPreviewServer) writePage(w http.ResponseWriter, data pathPreviewPageData, activeFilename string) {
+	data.RootTitle = filepath.Base(p.root)
+	data.ShowTree = p.directoryMode
+	data.Themes = previewThemes
+	if p.directoryMode {
+		activeRelative := ""
+		if activeFilename != "" {
+			activeRelative, _ = filepath.Rel(p.root, activeFilename)
+		}
+		tree, err := p.buildTree(p.root, activeRelative)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.Tree = tree
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", previewContentSecurityPolicy)
-	t := template.Must(template.New("directory").Parse(pathPreviewDirectoryPage))
-	if err := t.Execute(w, map[string]any{"Title": title, "Entries": entries, "CSS": template.CSS(css)}); err != nil {
-		log.Printf("directory preview render: %v", err)
+	t := template.Must(template.New("path-preview").Parse(pathPreviewPage))
+	if err := t.Execute(w, data); err != nil {
+		log.Printf("path preview render: %v", err)
 	}
+}
+
+func (p *pathPreviewServer) buildTree(directory, activeRelative string) ([]pathPreviewTreeNode, error) {
+	items, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]pathPreviewTreeNode, 0, len(items))
+	for _, item := range items {
+		itemPath := filepath.Join(directory, item.Name())
+		relative, err := filepath.Rel(p.root, itemPath)
+		if err != nil {
+			return nil, err
+		}
+		if item.IsDir() {
+			children, err := p.buildTree(itemPath, activeRelative)
+			if err != nil {
+				return nil, err
+			}
+			if len(children) > 0 {
+				nodes = append(nodes, pathPreviewTreeNode{
+					Name:     item.Name(),
+					IsDir:    true,
+					Children: children,
+				})
+			}
+			continue
+		}
+		if !isMarkdownPath(item.Name()) {
+			continue
+		}
+		nodes = append(nodes, pathPreviewTreeNode{
+			Name:   strings.TrimSuffix(item.Name(), filepath.Ext(item.Name())),
+			URL:    pathPreviewURL(relative),
+			Active: filepath.Clean(relative) == filepath.Clean(activeRelative),
+		})
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].IsDir != nodes[j].IsDir {
+			return nodes[i].IsDir
+		}
+		return strings.ToLower(nodes[i].Name) < strings.ToLower(nodes[j].Name)
+	})
+	return nodes, nil
+}
+
+func pathPreviewURL(relative string) string {
+	return (&url.URL{Path: "/" + filepath.ToSlash(relative)}).EscapedPath()
 }
 
 func escapedPathSegment(segment string) string {

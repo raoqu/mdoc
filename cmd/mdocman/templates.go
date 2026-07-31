@@ -19,7 +19,7 @@ func (s *server) templates(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		notebookID := r.URL.Query().Get("notebookId")
-		rows, err := s.db.Query(`SELECT id,notebook_id,title,content,created_at FROM templates WHERE (?='' OR notebook_id=?) ORDER BY lower(title)`, notebookID, notebookID)
+		rows, err := s.database().Query(`SELECT id,notebook_id,title,content,created_at FROM templates WHERE (?='' OR notebook_id=?) ORDER BY lower(title)`, notebookID, notebookID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -47,7 +47,7 @@ func (s *server) templates(w http.ResponseWriter, r *http.Request) {
 		}
 		item.Title = strings.TrimSpace(item.Title)
 		item.CreatedAt = time.Now().Format(time.RFC3339Nano)
-		_, err = s.db.Exec(`INSERT INTO templates(id,notebook_id,title,content,created_at) VALUES(?,?,?,?,?)`, item.ID, item.NotebookID, item.Title, item.Content, item.CreatedAt)
+		_, err = s.database().Exec(`INSERT INTO templates(id,notebook_id,title,content,created_at) VALUES(?,?,?,?,?)`, item.ID, item.NotebookID, item.Title, item.Content, item.CreatedAt)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -73,7 +73,7 @@ func (s *server) template(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "title is required", 400)
 			return
 		}
-		result, err := s.db.Exec(`UPDATE templates SET title=?,content=? WHERE id=?`, strings.TrimSpace(item.Title), item.Content, id)
+		result, err := s.database().Exec(`UPDATE templates SET title=?,content=? WHERE id=?`, strings.TrimSpace(item.Title), item.Content, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -85,7 +85,7 @@ func (s *server) template(w http.ResponseWriter, r *http.Request) {
 		item.ID = id
 		jsonOut(w, item)
 	case http.MethodDelete:
-		result, err := s.db.Exec(`DELETE FROM templates WHERE id=?`, id)
+		result, err := s.database().Exec(`DELETE FROM templates WHERE id=?`, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

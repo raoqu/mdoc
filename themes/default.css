@@ -1,0 +1,769 @@
+/* Complete base skin and shared preview layout. */
+:root {
+  color-scheme: light;
+  --preview-background: #faf9f5;
+  --preview-surface: #f0f3ed;
+  --preview-surface-strong: #e4e9e2;
+  --preview-text: #30332e;
+  --preview-muted-text: #6e736b;
+  --preview-link: #45604a;
+  --preview-border: #d8d8d2;
+  --preview-accent: #78907c;
+  --preview-inline-code-background: #ecebe6;
+  --preview-inline-code-text: #7d4d3a;
+  --preview-code-background: #424242;
+  --preview-code-text: #e8e9e5;
+  --preview-body-font: Georgia, "Songti SC", "STSong", serif;
+  --preview-body-font-size: 16px;
+  --preview-body-line-height: 1.6;
+  --preview-heading-font: Georgia, "Songti SC", "STSong", serif;
+  --preview-h1-font: var(--preview-heading-font);
+  --preview-h2-font: var(--preview-heading-font);
+  --preview-h3-font: var(--preview-heading-font);
+  --preview-h4-font: var(--preview-heading-font);
+  --preview-h5-font: var(--preview-heading-font);
+  --preview-h6-font: var(--preview-heading-font);
+  --preview-heading-line-height: 1.35;
+  --preview-table-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --preview-table-font-size: 14px;
+  --preview-table-line-height: 1.6;
+  --preview-code-font: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --preview-code-font-size: 14px;
+  --preview-code-line-height: 1.65;
+  --preview-quote-font: Georgia, "Songti SC", "STSong", serif;
+  --preview-quote-font-size: 17px;
+  --preview-quote-line-height: 1.6;
+  color: var(--preview-text);
+  background: var(--preview-background);
+  font-family: var(--preview-body-font);
+}
+
+html {
+  min-height: 100%;
+  background: var(--preview-background);
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  color: var(--preview-text);
+  background: var(--preview-background);
+}
+
+header {
+  display: flex;
+  height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 max(24px, calc((100% - 1080px) / 2));
+  border-bottom: 1px solid var(--preview-border);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+a {
+  color: var(--preview-link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.layout {
+  display: flex;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.layout aside {
+  width: 220px;
+  flex: none;
+  padding: 70px 24px;
+  border-right: 1px solid var(--preview-border);
+  color: var(--preview-muted-text);
+  font: 13px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.layout aside b {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.layout aside a {
+  display: block;
+  padding: 7px 9px;
+  border-radius: 5px;
+}
+
+.layout aside a.active {
+  background: var(--preview-surface-strong);
+  color: var(--preview-link);
+  font-weight: 600;
+}
+
+.layout main {
+  width: 100%;
+  max-width: 820px;
+  min-width: 0;
+  min-height: 70vh;
+  margin: 70px auto;
+  padding: 0 36px;
+}
+
+article {
+  color: var(--preview-text);
+  font-family: var(--preview-body-font);
+  font-size: var(--preview-body-font-size);
+  line-height: var(--preview-body-line-height);
+  overflow-wrap: anywhere;
+}
+
+article p,
+article ul,
+article ol,
+article dl {
+  line-height: var(--preview-body-line-height);
+}
+
+article p {
+  text-indent: 2em;
+}
+
+article h1,
+article h2,
+article h3,
+article h4,
+article h5,
+article h6 {
+  margin: 1.75em 0 0.65em;
+  color: var(--preview-text);
+  font-weight: 700;
+  line-height: var(--preview-heading-line-height);
+  text-wrap: balance;
+}
+
+article h1 {
+  margin-top: 0;
+  font-family: var(--preview-h1-font);
+  font-size: 2.25em;
+}
+
+article h2 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--preview-border);
+  font-family: var(--preview-h2-font);
+  font-size: 1.75em;
+}
+
+article h3 {
+  font-family: var(--preview-h3-font);
+  font-size: 1.4em;
+}
+
+article h4 {
+  font-family: var(--preview-h4-font);
+  font-size: 1.15em;
+}
+
+article h5 {
+  font-family: var(--preview-h5-font);
+  font-size: 1em;
+}
+
+article h6 {
+  color: var(--preview-muted-text);
+  font-family: var(--preview-h6-font);
+  font-size: 0.9em;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+table {
+  display: block;
+  width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  font-family: var(--preview-table-font);
+  font-size: var(--preview-table-font-size);
+  line-height: var(--preview-table-line-height);
+}
+
+th,
+td {
+  padding: 8px 12px;
+  border: 1px solid var(--preview-border);
+  color: var(--preview-text);
+  font-family: var(--preview-table-font);
+  line-height: var(--preview-table-line-height);
+  text-align: left;
+}
+
+th {
+  background: var(--preview-surface);
+  font-weight: 650;
+}
+
+pre {
+  padding: 8px;
+  overflow: auto;
+  border-radius: 4px;
+  color: var(--preview-code-text);
+  background: var(--preview-code-background);
+  font-family: var(--preview-code-font);
+  font-size: var(--preview-code-font-size);
+  line-height: var(--preview-code-line-height);
+  tab-size: 2;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--preview-code-font);
+  font-size: var(--preview-code-font-size);
+  line-height: var(--preview-code-line-height);
+}
+
+pre code {
+  color: inherit;
+  background: transparent;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+:not(pre) > code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: var(--preview-inline-code-text);
+  background: var(--preview-inline-code-background);
+}
+
+/* Chroma (goldmark-highlighting) token colors — monokai on dark code blocks. */
+.chroma {
+  color: var(--preview-code-text);
+  background: var(--preview-code-background);
+}
+
+.chroma .err { color: #960050; background-color: #1e0010; }
+.chroma .lnlinks { outline: none; text-decoration: none; color: inherit; }
+.chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }
+.chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }
+.chroma .hl { background-color: color-mix(in srgb, var(--preview-code-text) 12%, transparent); }
+.chroma .lnt,
+.chroma .ln {
+  white-space: pre;
+  -webkit-user-select: none;
+  user-select: none;
+  margin-right: 0.4em;
+  padding: 0 0.4em 0 0.4em;
+  color: color-mix(in srgb, var(--preview-code-text) 45%, transparent);
+}
+.chroma .line { display: flex; }
+.chroma .k,
+.chroma .kc,
+.chroma .kd,
+.chroma .kp,
+.chroma .kr,
+.chroma .kt,
+.chroma .no { color: #66d9ef; }
+.chroma .kn,
+.chroma .nt,
+.chroma .o,
+.chroma .ow,
+.chroma .gd { color: #f92672; }
+.chroma .na,
+.chroma .nc,
+.chroma .nd,
+.chroma .ne,
+.chroma .nf,
+.chroma .nx,
+.chroma .gi { color: #a6e22e; }
+.chroma .l,
+.chroma .se,
+.chroma .m,
+.chroma .mb,
+.chroma .mf,
+.chroma .mh,
+.chroma .mi,
+.chroma .il,
+.chroma .mo { color: #ae81ff; }
+.chroma .ld,
+.chroma .s,
+.chroma .sa,
+.chroma .sb,
+.chroma .sc,
+.chroma .dl,
+.chroma .sd,
+.chroma .s2,
+.chroma .sh,
+.chroma .si,
+.chroma .sx,
+.chroma .sr,
+.chroma .s1,
+.chroma .ss { color: #e6db74; }
+.chroma .c,
+.chroma .ch,
+.chroma .cm,
+.chroma .c1,
+.chroma .cs,
+.chroma .cp,
+.chroma .cpf,
+.chroma .gu { color: #75715e; }
+.chroma .ge { font-style: italic; }
+.chroma .gs { font-weight: bold; }
+
+/* Mermaid diagrams rendered client-side from ```mermaid fences. */
+.mermaid-wrap {
+  position: relative;
+  margin: 1.5em 0;
+}
+
+.mermaid {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--preview-border);
+  border-radius: 8px;
+  text-align: center;
+  background: var(--preview-surface);
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-expand {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--preview-border);
+  border-radius: 8px;
+  place-items: center;
+  color: var(--preview-muted-text);
+  background: color-mix(in srgb, var(--preview-background) 92%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--preview-text) 10%, transparent);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.mermaid-wrap:hover .mermaid-expand,
+.mermaid-wrap:focus-within .mermaid-expand,
+.mermaid-expand:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mermaid-expand:hover {
+  color: var(--preview-text);
+  background: var(--preview-surface);
+}
+
+.mermaid-expand svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.mermaid-expand:focus-visible {
+  outline: 2px solid var(--preview-accent);
+  outline-offset: 2px;
+}
+
+pre:has(> code.language-mermaid) {
+  color: var(--preview-text);
+  background: var(--preview-surface);
+  border: 1px solid var(--preview-border);
+}
+
+body.mermaid-lightbox-open {
+  overflow: hidden;
+}
+
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: stretch;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.mermaid-lightbox[hidden] {
+  display: none;
+}
+
+.mermaid-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--preview-text) 42%, transparent);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+}
+
+.mermaid-lightbox-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  overflow: hidden;
+  border: 1px solid var(--preview-border);
+  border-radius: 14px;
+  background: var(--preview-background);
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--preview-text) 28%, transparent);
+}
+
+.mermaid-lightbox-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--preview-border);
+  background: color-mix(in srgb, var(--preview-surface) 70%, var(--preview-background));
+  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.mermaid-lightbox-scale {
+  min-width: 3.5em;
+  color: var(--preview-muted-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.mermaid-lightbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mermaid-lightbox-btn {
+  display: grid;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--preview-border);
+  border-radius: 8px;
+  place-items: center;
+  color: var(--preview-text);
+  background: var(--preview-background);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mermaid-lightbox-btn:hover {
+  background: var(--preview-surface);
+}
+
+.mermaid-lightbox-btn:focus-visible {
+  outline: 2px solid var(--preview-accent);
+  outline-offset: 2px;
+}
+
+.mermaid-lightbox-close {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.mermaid-lightbox-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--preview-border) 55%, transparent) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(color-mix(in srgb, var(--preview-border) 55%, transparent) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--preview-surface);
+}
+
+.mermaid-lightbox-stage.is-dragging {
+  cursor: grabbing;
+}
+
+.mermaid-lightbox-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.mermaid-lightbox-canvas svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  transform: translate(-50%, -50%);
+  background: var(--preview-background);
+  border: 1px solid var(--preview-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--preview-text) 12%, transparent);
+}
+
+.mermaid-lightbox-hint {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--preview-border);
+  color: var(--preview-muted-text);
+  font: 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+}
+
+blockquote {
+  margin: 25px 0;
+  padding: 14px 20px;
+  border-left: 3px solid var(--preview-accent);
+  color: var(--preview-muted-text);
+  background: var(--preview-surface);
+  font-family: var(--preview-quote-font);
+  font-size: var(--preview-quote-font-size);
+  line-height: var(--preview-quote-line-height);
+}
+
+blockquote > :first-child {
+  margin-top: 0;
+}
+
+blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+blockquote p {
+  line-height: var(--preview-quote-line-height);
+}
+
+hr {
+  height: 1px;
+  margin: 2.5em 0;
+  border: 0;
+  background: var(--preview-border);
+}
+
+footer {
+  padding: 35px;
+  color: var(--preview-muted-text);
+  font: 12px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+}
+
+.theme-switcher {
+  position: fixed;
+  top: 16px;
+  right: 18px;
+  z-index: 20;
+  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.theme-toggle {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--preview-border);
+  border-radius: 50%;
+  place-items: center;
+  color: var(--preview-muted-text);
+  background: var(--preview-background);
+  background: color-mix(in srgb, var(--preview-background) 92%, transparent);
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--preview-text) 10%, transparent);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: var(--preview-text);
+  background: var(--preview-surface);
+}
+
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.theme-toggle:focus-visible,
+.theme-menu-item:focus-visible {
+  outline: 2px solid var(--preview-accent);
+  outline-offset: 2px;
+}
+
+.theme-menu {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  box-sizing: border-box;
+  min-width: 142px;
+  padding: 5px;
+  border: 1px solid var(--preview-border);
+  border-radius: 9px;
+  color: var(--preview-text);
+  background: var(--preview-background);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--preview-text) 16%, transparent);
+}
+
+.theme-menu[hidden] {
+  display: none;
+}
+
+.theme-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--preview-text);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-menu-item:hover,
+.theme-menu-item[aria-checked="true"] {
+  background: var(--preview-surface);
+}
+
+.theme-menu-check {
+  width: 1em;
+  color: var(--preview-link);
+  font-weight: 700;
+  visibility: hidden;
+}
+
+.theme-menu-item[aria-checked="true"] .theme-menu-check {
+  visibility: visible;
+}
+
+.path-tree {
+  position: sticky;
+  top: 0;
+  box-sizing: border-box;
+  height: 100vh;
+  align-self: flex-start;
+  overflow: auto;
+  padding-top: 52px !important;
+}
+
+.path-tree-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path-tree ul ul {
+  padding-left: 14px;
+}
+
+.path-tree li {
+  margin: 2px 0;
+}
+
+.path-tree details > summary {
+  padding: 6px 7px;
+  border-radius: 5px;
+  color: var(--preview-muted-text);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.path-tree details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.path-tree details > summary::before {
+  display: inline-block;
+  width: 13px;
+  content: "›";
+  transition: transform 0.15s;
+}
+
+.path-tree details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.path-tree details > summary:hover,
+.path-tree a:hover,
+.directory-list a:hover {
+  background: var(--preview-surface);
+  text-decoration: none;
+}
+
+.path-tree a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-tree a.active {
+  color: var(--preview-link);
+  background: var(--preview-surface-strong);
+  font-weight: 600;
+}
+
+.directory-list {
+  padding: 0;
+  list-style: none;
+}
+
+.directory-list li {
+  border-bottom: 1px solid var(--preview-border);
+}
+
+.directory-list a {
+  display: block;
+  padding: 10px 4px;
+}
+
+@media (max-width: 760px) {
+  .layout aside,
+  .path-tree {
+    display: none;
+  }
+
+  .layout main {
+    margin-top: 78px;
+    padding: 0 22px;
+  }
+
+  .theme-switcher {
+    top: 12px;
+    right: 12px;
+  }
+}

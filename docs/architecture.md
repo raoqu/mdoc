@@ -5,12 +5,13 @@
 ```mermaid
 flowchart LR
     UI[TypeScript 管理界面] -->|REST /api| Admin[mdocman-admin 管理端]
-    Admin --> DB[(SQLite mdocman.db)]
-    UI -->|图片上传| Assets[data/uploads]
+    UI -->|选择/新建| Registry[(~/.mdoc/*.db)]
+    Admin --> Registry
+    UI -->|图片上传| Assets[~/.mdoc/uploads]
     Admin -->|内容哈希增量生成| Static[public-site 静态文件]
     Static --> Site[mdocman-site 只读发布端]
     UI -->|目录导入| Import[Markdown 文件]
-    DB -->|ZIP 导出| Export[保留目录层级的 Markdown]
+    Registry -->|ZIP 导出| Export[保留目录层级的 Markdown]
 ```
 
 ## SQLite 实体关系

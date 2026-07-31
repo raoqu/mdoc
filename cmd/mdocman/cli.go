@@ -19,7 +19,7 @@ func runCLI(s *server, args []string, out, errOut io.Writer) bool {
 	case "today":
 		date := time.Now().Format("2006-01-02")
 		var title, content string
-		err := s.db.QueryRow(`SELECT title,content FROM documents WHERE id=? AND trashed=0`, "daily-"+date).Scan(&title, &content)
+		err := s.database().QueryRow(`SELECT title,content FROM documents WHERE id=? AND trashed=0`, "daily-"+date).Scan(&title, &content)
 		if err == sql.ErrNoRows {
 			fmt.Fprintf(errOut, "No daily note exists for %s. Open the app to create it.\n", date)
 			return true
@@ -40,7 +40,7 @@ func runCLI(s *server, args []string, out, errOut io.Writer) bool {
 			fmt.Fprintln(errOut, "Usage: mdocman search <query>")
 			return true
 		}
-		rows, err := s.db.Query(`SELECT d.id,d.title,snippet(documents_fts,2,'','',' … ',12) FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id WHERE documents_fts MATCH ? AND d.trashed=0 ORDER BY bm25(documents_fts) LIMIT 20`, ftsExpression(query))
+		rows, err := s.database().Query(`SELECT d.id,d.title,snippet(documents_fts,2,'','',' … ',12) FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id WHERE documents_fts MATCH ? AND d.trashed=0 ORDER BY bm25(documents_fts) LIMIT 20`, ftsExpression(query))
 		if err != nil {
 			fmt.Fprintln(errOut, err)
 			return true
@@ -60,7 +60,7 @@ func runCLI(s *server, args []string, out, errOut io.Writer) bool {
 			return true
 		}
 		var id, notebookID, folderID, title, content string
-		err := s.db.QueryRow(`SELECT id,notebook_id,COALESCE(folder_id,''),title,content FROM documents WHERE trashed=0 AND (id=? OR lower(title)=lower(?)) ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1`, ref, ref, ref).Scan(&id, &notebookID, &folderID, &title, &content)
+		err := s.database().QueryRow(`SELECT id,notebook_id,COALESCE(folder_id,''),title,content FROM documents WHERE trashed=0 AND (id=? OR lower(title)=lower(?)) ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1`, ref, ref, ref).Scan(&id, &notebookID, &folderID, &title, &content)
 		if err == sql.ErrNoRows {
 			fmt.Fprintf(errOut, "Note not found: %s\n", ref)
 			return true

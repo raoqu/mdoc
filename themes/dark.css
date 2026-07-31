@@ -1,0 +1,16 @@
+/* Dark color overrides; all layout and typography inherit from default.css. */
+:root {
+  color-scheme: dark;
+  --preview-background: #171a18;
+  --preview-surface: #222824;
+  --preview-surface-strong: #2b352e;
+  --preview-text: #e2e7e1;
+  --preview-muted-text: #a6afa6;
+  --preview-link: #9fc5a7;
+  --preview-border: #3a423c;
+  --preview-accent: #7fa88a;
+  --preview-inline-code-background: #292f2b;
+  --preview-inline-code-text: #e4b9a4;
+  --preview-code-background: #0f1210;
+  --preview-code-text: #e7ede8;
+}

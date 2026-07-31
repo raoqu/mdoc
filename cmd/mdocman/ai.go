@@ -71,7 +71,7 @@ func keyHint(key string) string {
 }
 
 func (s *server) listAIProviders() ([]aiProviderConfig, error) {
-	rows, err := s.db.Query(`SELECT id,provider,label,model,key_hint,base_url,is_default,created_at FROM ai_providers ORDER BY is_default DESC,created_at`)
+	rows, err := s.database().Query(`SELECT id,provider,label,model,key_hint,base_url,is_default,created_at FROM ai_providers ORDER BY is_default DESC,created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (s *server) aiProviders(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not save the API key in the OS keychain: "+err.Error(), 500)
 			return
 		}
-		tx, err := s.db.Begin()
+		tx, err := s.database().Begin()
 		if err != nil {
 			_ = keyring.Delete(aiKeychainService, id)
 			http.Error(w, err.Error(), 500)
@@ -183,7 +183,7 @@ func (s *server) aiProvider(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "makeDefault must be true", 400)
 			return
 		}
-		tx, err := s.db.Begin()
+		tx, err := s.database().Begin()
 		if err == nil {
 			_, err = tx.Exec(`UPDATE ai_providers SET is_default=0`)
 		}
@@ -213,7 +213,7 @@ func (s *server) aiProvider(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, items)
 	case http.MethodDelete:
 		var wasDefault int
-		err := s.db.QueryRow(`SELECT is_default FROM ai_providers WHERE id=?`, id).Scan(&wasDefault)
+		err := s.database().QueryRow(`SELECT is_default FROM ai_providers WHERE id=?`, id).Scan(&wasDefault)
 		if err == sql.ErrNoRows {
 			http.Error(w, "provider not found", 404)
 			return
@@ -222,7 +222,7 @@ func (s *server) aiProvider(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		tx, err := s.db.Begin()
+		tx, err := s.database().Begin()
 		if err == nil {
 			_, err = tx.Exec(`DELETE FROM ai_providers WHERE id=?`, id)
 		}
@@ -297,9 +297,9 @@ func (s *server) configuredProvider(id string) (aiProviderConfig, string, error)
 	query := `SELECT id,provider,label,model,key_hint,base_url,is_default,created_at FROM ai_providers `
 	var err error
 	if id == "" {
-		err = s.db.QueryRow(query+`ORDER BY is_default DESC,created_at LIMIT 1`).Scan(&config.ID, &config.Provider, &config.Label, &config.Model, &config.KeyHint, &config.BaseURL, &isDefault, &config.CreatedAt)
+		err = s.database().QueryRow(query+`ORDER BY is_default DESC,created_at LIMIT 1`).Scan(&config.ID, &config.Provider, &config.Label, &config.Model, &config.KeyHint, &config.BaseURL, &isDefault, &config.CreatedAt)
 	} else {
-		err = s.db.QueryRow(query+`WHERE id=?`, id).Scan(&config.ID, &config.Provider, &config.Label, &config.Model, &config.KeyHint, &config.BaseURL, &isDefault, &config.CreatedAt)
+		err = s.database().QueryRow(query+`WHERE id=?`, id).Scan(&config.ID, &config.Provider, &config.Label, &config.Model, &config.KeyHint, &config.BaseURL, &isDefault, &config.CreatedAt)
 	}
 	if err != nil {
 		return config, "", err
@@ -404,9 +404,9 @@ func (s *server) groundingNotes(notebookID, query string) ([]groundedNote, error
 	var rows *sql.Rows
 	var err error
 	if expression == "" {
-		rows, err = s.db.Query(`SELECT id,title,content FROM documents WHERE notebook_id=? AND trashed=0 AND private=0 ORDER BY updated_at DESC LIMIT 8`, notebookID)
+		rows, err = s.database().Query(`SELECT id,title,content FROM documents WHERE notebook_id=? AND trashed=0 AND private=0 ORDER BY updated_at DESC LIMIT 8`, notebookID)
 	} else {
-		rows, err = s.db.Query(`SELECT d.id,d.title,d.content FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id WHERE documents_fts MATCH ? AND d.notebook_id=? AND d.trashed=0 AND d.private=0 ORDER BY bm25(documents_fts),d.updated_at DESC LIMIT 8`, expression, notebookID)
+		rows, err = s.database().Query(`SELECT d.id,d.title,d.content FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id WHERE documents_fts MATCH ? AND d.notebook_id=? AND d.trashed=0 AND d.private=0 ORDER BY bm25(documents_fts),d.updated_at DESC LIMIT 8`, expression, notebookID)
 	}
 	if err != nil {
 		return nil, err
@@ -456,7 +456,7 @@ func (s *server) groundingNotes(notebookID, query string) ([]groundedNote, error
 			if classifyErr != nil || verdict != "send" {
 				continue
 			}
-			description, readErr := os.ReadFile(filepath.Join("data/uploads", name+".reflect.md"))
+			description, readErr := os.ReadFile(filepath.Join(s.uploadsDir(), name+".reflect.md"))
 			if readErr == nil {
 				body := stripFrontmatter(string(description))
 				if len(body) > 6000 {
@@ -513,11 +513,11 @@ func (s *server) aiChat(w http.ResponseWriter, r *http.Request) {
 	if conversationID == "" {
 		conversationID, err = randomToken()
 		if err == nil {
-			_, err = s.db.Exec(`INSERT INTO chat_conversations(id,notebook_id,title,created_at,updated_at) VALUES(?,?,?,?,?)`, conversationID, input.NotebookID, titleForConversation(input.Message), now, now)
+			_, err = s.database().Exec(`INSERT INTO chat_conversations(id,notebook_id,title,created_at,updated_at) VALUES(?,?,?,?,?)`, conversationID, input.NotebookID, titleForConversation(input.Message), now, now)
 		}
 	} else {
 		var storedNotebook string
-		err = s.db.QueryRow(`SELECT notebook_id FROM chat_conversations WHERE id=?`, conversationID).Scan(&storedNotebook)
+		err = s.database().QueryRow(`SELECT notebook_id FROM chat_conversations WHERE id=?`, conversationID).Scan(&storedNotebook)
 		if err == nil && storedNotebook != input.NotebookID {
 			err = errors.New("conversation belongs to another notebook")
 		}
@@ -532,7 +532,7 @@ func (s *server) aiChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	messages := []aiMessage{{Role: "system", Content: chatSystemPrompt(time.Now().Format("2006-01-02"), notes)}}
-	rows, err := s.db.Query(`SELECT role,content FROM chat_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 20`, conversationID)
+	rows, err := s.database().Query(`SELECT role,content FROM chat_messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 20`, conversationID)
 	if err == nil {
 		history := []aiMessage{}
 		for rows.Next() {
@@ -548,7 +548,7 @@ func (s *server) aiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	messages = append(messages, aiMessage{Role: "user", Content: input.Message})
 	userID, _ := randomToken()
-	_, _ = s.db.Exec(`INSERT INTO chat_messages(id,conversation_id,role,content,created_at) VALUES(?,?,?,?,?)`, userID, conversationID, "user", input.Message, now)
+	_, _ = s.database().Exec(`INSERT INTO chat_messages(id,conversation_id,role,content,created_at) VALUES(?,?,?,?,?)`, userID, conversationID, "user", input.Message, now)
 	flusher, ok := beginAIStream(w)
 	if !ok {
 		return
@@ -567,8 +567,8 @@ func (s *server) aiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	assistantID, _ := randomToken()
 	doneAt := time.Now().Format(time.RFC3339Nano)
-	_, _ = s.db.Exec(`INSERT INTO chat_messages(id,conversation_id,role,content,created_at) VALUES(?,?,?,?,?)`, assistantID, conversationID, "assistant", full, doneAt)
-	_, _ = s.db.Exec(`UPDATE chat_conversations SET updated_at=? WHERE id=?`, doneAt, conversationID)
+	_, _ = s.database().Exec(`INSERT INTO chat_messages(id,conversation_id,role,content,created_at) VALUES(?,?,?,?,?)`, assistantID, conversationID, "assistant", full, doneAt)
+	_, _ = s.database().Exec(`UPDATE chat_conversations SET updated_at=? WHERE id=?`, doneAt, conversationID)
 	writeAIEvent(w, flusher, map[string]any{"type": "complete", "text": full})
 }
 
@@ -578,7 +578,7 @@ func (s *server) aiConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notebookID := r.URL.Query().Get("notebookId")
-	rows, err := s.db.Query(`SELECT id,notebook_id,title,created_at,updated_at FROM chat_conversations WHERE (?='' OR notebook_id=?) ORDER BY updated_at DESC LIMIT 50`, notebookID, notebookID)
+	rows, err := s.database().Query(`SELECT id,notebook_id,title,created_at,updated_at FROM chat_conversations WHERE (?='' OR notebook_id=?) ORDER BY updated_at DESC LIMIT 50`, notebookID, notebookID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -602,7 +602,7 @@ func (s *server) aiConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		rows, err := s.db.Query(`SELECT id,conversation_id,role,content,created_at FROM chat_messages WHERE conversation_id=? ORDER BY created_at`, id)
+		rows, err := s.database().Query(`SELECT id,conversation_id,role,content,created_at FROM chat_messages WHERE conversation_id=? ORDER BY created_at`, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -617,7 +617,7 @@ func (s *server) aiConversation(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOut(w, items)
 	case http.MethodDelete:
-		result, err := s.db.Exec(`DELETE FROM chat_conversations WHERE id=?`, id)
+		result, err := s.database().Exec(`DELETE FROM chat_conversations WHERE id=?`, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

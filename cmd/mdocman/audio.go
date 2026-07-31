@@ -46,7 +46,7 @@ func audioExtension(mimeType string) string {
 }
 
 func (s *server) listAudioMemos(notebookID string) ([]audioMemoRecord, error) {
-	rows, err := s.db.Query(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos WHERE (?='' OR notebook_id=?) ORDER BY created_at DESC`, notebookID, notebookID)
+	rows, err := s.database().Query(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos WHERE (?='' OR notebook_id=?) ORDER BY created_at DESC`, notebookID, notebookID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,9 +125,9 @@ func (s *server) audioMemos(w http.ResponseWriter, r *http.Request) {
 		nowTime := time.Now()
 		date := nowTime.Format("2006-01-02")
 		fileName := fmt.Sprintf("audio-memo-%s-%s.%s", date, nowTime.Format("150405.000"), audioExtension(mimeType))
-		if err = os.MkdirAll("data/audio-memos", 0755); err == nil {
+		if err = os.MkdirAll(s.audioMemosDir(), 0700); err == nil {
 			var output *os.File
-			output, err = os.Create(filepath.Join("data/audio-memos", fileName))
+			output, err = os.Create(filepath.Join(s.audioMemosDir(), fileName))
 			if err == nil {
 				_, err = io.Copy(output, file)
 				_ = output.Close()
@@ -138,7 +138,7 @@ func (s *server) audioMemos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		now := nowTime.Format(time.RFC3339Nano)
-		tx, err := s.db.Begin()
+		tx, err := s.database().Begin()
 		if err == nil {
 			_, err = tx.Exec(`INSERT INTO audio_memos(id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at) VALUES(?,?,?,?,?,'pending','','',?)`, id, notebookID, date, fileName, mimeType, now)
 		}
@@ -156,7 +156,7 @@ func (s *server) audioMemos(w http.ResponseWriter, r *http.Request) {
 			_ = tx.Rollback()
 		}
 		if err != nil {
-			_ = os.Remove(filepath.Join("data/audio-memos", fileName))
+			_ = os.Remove(filepath.Join(s.audioMemosDir(), fileName))
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -178,7 +178,7 @@ func (s *server) transcriptionProvider(id string) (aiProviderConfig, string, err
 		return config, key, err
 	}
 	var selected string
-	err := s.db.QueryRow(`SELECT id FROM ai_providers WHERE provider IN ('openai','google') ORDER BY is_default DESC,created_at LIMIT 1`).Scan(&selected)
+	err := s.database().QueryRow(`SELECT id FROM ai_providers WHERE provider IN ('openai','google') ORDER BY is_default DESC,created_at LIMIT 1`).Scan(&selected)
 	if err != nil {
 		return aiProviderConfig{}, "", err
 	}
@@ -265,14 +265,14 @@ func (s *server) audioMemo(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&providerInput)
 	var memo audioMemoRecord
-	err := s.db.QueryRow(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos WHERE id=?`, id).Scan(&memo.ID, &memo.NotebookID, &memo.RecordedDate, &memo.FileName, &memo.MimeType, &memo.Status, &memo.Error, &memo.TranscriptDocumentID, &memo.CreatedAt)
+	err := s.database().QueryRow(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos WHERE id=?`, id).Scan(&memo.ID, &memo.NotebookID, &memo.RecordedDate, &memo.FileName, &memo.MimeType, &memo.Status, &memo.Error, &memo.TranscriptDocumentID, &memo.CreatedAt)
 	if err != nil {
 		http.Error(w, "audio memo not found", 404)
 		return
 	}
 	daily, err := s.documentByID("daily-" + memo.RecordedDate)
 	if err == nil && (daily.Private || frontmatterPrivate(daily.Content)) {
-		_, _ = s.db.Exec(`UPDATE audio_memos SET status='blocked',error='The daily note is private; cloud transcription is disabled.' WHERE id=?`, id)
+		_, _ = s.database().Exec(`UPDATE audio_memos SET status='blocked',error='The daily note is private; cloud transcription is disabled.' WHERE id=?`, id)
 		http.Error(w, "the daily note is private; cloud transcription is disabled", http.StatusForbidden)
 		return
 	}
@@ -281,12 +281,12 @@ func (s *server) audioMemo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "add an OpenAI or Google provider before transcribing", 400)
 		return
 	}
-	audio, err := os.ReadFile(filepath.Join("data/audio-memos", memo.FileName))
+	audio, err := os.ReadFile(filepath.Join(s.audioMemosDir(), memo.FileName))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE audio_memos SET status='transcribing',error='' WHERE id=?`, id)
+	_, _ = s.database().Exec(`UPDATE audio_memos SET status='transcribing',error='' WHERE id=?`, id)
 	var transcript string
 	if config.Provider == "openai" {
 		transcript, err = transcribeOpenAI(config, apiKey, memo.FileName, audio)
@@ -294,14 +294,14 @@ func (s *server) audioMemo(w http.ResponseWriter, r *http.Request) {
 		transcript, err = transcribeGoogle(config, apiKey, memo.MimeType, audio)
 	}
 	if err != nil {
-		_, _ = s.db.Exec(`UPDATE audio_memos SET status='failed',error=? WHERE id=?`, err.Error(), id)
+		_, _ = s.database().Exec(`UPDATE audio_memos SET status='failed',error=? WHERE id=?`, err.Error(), id)
 		http.Error(w, err.Error(), 502)
 		return
 	}
 	title := "音频备忘 " + strings.ReplaceAll(memo.RecordedDate, "-", "/") + " " + memo.CreatedAt[11:16]
 	noteID := "audio-note-" + id
 	now := time.Now().Format(time.RFC3339Nano)
-	tx, err := s.db.Begin()
+	tx, err := s.database().Begin()
 	if err == nil {
 		var folderID string
 		err = tx.QueryRow(`SELECT id FROM folders WHERE notebook_id=? ORDER BY position LIMIT 1`, memo.NotebookID).Scan(&folderID)

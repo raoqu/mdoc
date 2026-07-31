@@ -9,17 +9,83 @@ export interface MarkdownTask {
   id: string;
   documentId: string;
   documentTitle: string;
+  documentPinned: boolean;
+  documentUpdatedAt: string;
   line: number;
   content: string;
   checked: boolean;
+  explicitDate: string | null;
+  dailyDate: string | null;
   dueDate: string | null;
   breadcrumbs: string[];
 }
 
 const WIKI_LINK_PATTERN = /\[\[([^\]\n|#]+)(?:[|#][^\]\n]*)?\]\]/g;
 const TAG_PATTERN = /(^|[\s(])#([\p{L}\p{N}_/-]+)/gu;
-const TASK_PATTERN = /^(\s*)\+\s+\[([ xX])\]\s+(.*)$/;
+const TASK_PATTERN = /^(\s*)\+\s+\[([ xX])\](?:[ \t]+(.*))?$/;
 const DUE_DATE_PATTERN = /\[\[(\d{4}-\d{2}-\d{2})\]\]/;
+
+type TaskLineMatch = RegExpMatchArray & {
+  1: string;
+  2: string;
+  3: string | undefined;
+};
+
+function taskLinesIn(markdown: string): {
+  lines: string[];
+  matches: Map<number, TaskLineMatch>;
+} {
+  const lines = markdown.split("\n");
+  const matches = new Map<number, TaskLineMatch>();
+  let fence: "`" | "~" | null = null;
+
+  lines.forEach((line, lineIndex) => {
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0] as "`" | "~";
+      if (fence === null) fence = marker;
+      else if (fence === marker) fence = null;
+      return;
+    }
+    if (fence !== null) return;
+    const match = line.match(TASK_PATTERN) as TaskLineMatch | null;
+    if (match) matches.set(lineIndex, match);
+  });
+
+  return { lines, matches };
+}
+
+function locateTaskLine(
+  markdown: string,
+  lineIndex: number,
+  expectedContent?: string,
+): {
+  lines: string[];
+  lineIndex: number;
+  match: TaskLineMatch;
+} {
+  const { lines, matches } = taskLinesIn(markdown);
+  const indexed = matches.get(lineIndex);
+  if (
+    indexed &&
+    (expectedContent === undefined || (indexed[3] ?? "") === expectedContent)
+  ) {
+    return { lines, lineIndex, match: indexed };
+  }
+  if (expectedContent !== undefined) {
+    const relocated = [...matches.entries()].filter(
+      ([, match]) => (match[3] ?? "") === expectedContent,
+    );
+    if (relocated.length === 1) {
+      return {
+        lines,
+        lineIndex: relocated[0][0],
+        match: relocated[0][1],
+      };
+    }
+  }
+  throw new Error("任务已发生变化，请刷新后重试");
+}
 
 export function titleFromMarkdown(markdown: string, fallback: string): string {
   const match = markdown.match(/^#\s+(.+)$/m);
@@ -99,24 +165,36 @@ export function backlinksFor(
 
 export function tasksIn(documents: readonly DocumentLocation[]): MarkdownTask[] {
   return documents.flatMap(({ document }) => {
+    if (document.trashed) return [];
     const lines = document.content.split("\n");
     const ancestors: { indent: number; label: string }[] = [];
+    let fence: "`" | "~" | null = null;
     return lines.flatMap((line, lineIndex) => {
+      const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+      if (fenceMatch) {
+        const marker = fenceMatch[1][0] as "`" | "~";
+        if (fence === null) fence = marker;
+        else if (fence === marker) fence = null;
+        return [];
+      }
+      if (fence !== null) return [];
       const listItem = line.match(/^(\s*)[-+*]\s+(?:\[[ xX]\]\s+)?(.*)$/);
       const indent = listItem?.[1].replaceAll("\t", "    ").length ?? -1;
       if (listItem) {
         while (ancestors.length > 0 && ancestors.at(-1)!.indent >= indent) {
           ancestors.pop();
         }
+      } else if (line.trim() && !/^\s/.test(line)) {
+        ancestors.length = 0;
       }
-      const match = line.match(TASK_PATTERN);
+      const match = line.match(TASK_PATTERN) as TaskLineMatch | null;
       if (!match) {
         if (listItem && listItem[2].trim()) {
           ancestors.push({ indent, label: listItem[2].trim() });
         }
         return [];
       }
-      const content = match[3];
+      const content = match[3] ?? "";
       const explicitDate = content.match(DUE_DATE_PATTERN)?.[1] ?? null;
       const dailyDate = document.id.match(/^daily-(\d{4}-\d{2}-\d{2})$/)?.[1] ?? null;
       const breadcrumbs = ancestors
@@ -129,9 +207,13 @@ export function tasksIn(documents: readonly DocumentLocation[]): MarkdownTask[] 
           id: `${document.id}:${lineIndex}`,
           documentId: document.id,
           documentTitle: document.title,
+          documentPinned: Boolean(document.pinned),
+          documentUpdatedAt: document.updatedAt,
           line: lineIndex,
           content,
           checked: match[2].toLocaleLowerCase() === "x",
+          explicitDate,
+          dailyDate,
           dueDate: explicitDate ?? dailyDate,
           breadcrumbs,
         },
@@ -145,19 +227,11 @@ export function toggleTask(
   lineIndex: number,
   expectedContent?: string,
 ): string {
-  const lines = markdown.split("\n");
-  const line = lines[lineIndex];
-  if (line === undefined) {
-    return markdown;
-  }
-  const match = line.match(TASK_PATTERN);
-  if (!match) {
-    throw new Error("任务已发生变化，请刷新后重试");
-  }
-  if (expectedContent !== undefined && match[3] !== expectedContent) {
-    throw new Error("任务已发生变化，请刷新后重试");
-  }
-  lines[lineIndex] = `${match[1]}+ [${match[2] === " " ? "x" : " "}] ${match[3]}`;
+  const located = locateTaskLine(markdown, lineIndex, expectedContent);
+  const { lines, match } = located;
+  const content = match[3] ?? "";
+  lines[located.lineIndex] =
+    `${match[1]}+ [${match[2] === " " ? "x" : " "}]${content ? ` ${content}` : ""}`;
   return lines.join("\n");
 }
 
@@ -167,16 +241,77 @@ export function rescheduleTask(
   expectedContent: string,
   date: string | null,
 ): string {
-  const lines = markdown.split("\n");
-  const line = lines[lineIndex];
-  const match = line?.match(TASK_PATTERN);
-  if (!match || match[3] !== expectedContent) {
-    throw new Error("任务已发生变化，请刷新后重试");
-  }
-  const withoutDate = match[3].replace(DUE_DATE_PATTERN, "").replace(/\s{2,}/g, " ").trimEnd();
+  const located = locateTaskLine(markdown, lineIndex, expectedContent);
+  const { lines, match } = located;
+  const withoutDate = (match[3] ?? "")
+    .replace(DUE_DATE_PATTERN, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
   const content = date ? `${withoutDate} [[${date}]]` : withoutDate;
-  lines[lineIndex] = `${match[1]}+ [${match[2]}] ${content}`;
+  lines[located.lineIndex] =
+    `${match[1]}+ [${match[2]}]${content ? ` ${content}` : ""}`;
   return lines.join("\n");
+}
+
+export function editTask(
+  markdown: string,
+  lineIndex: number,
+  expectedContent: string,
+  nextContent: string,
+): string {
+  const content = nextContent.trim();
+  if (/[\r\n]/.test(content)) {
+    throw new Error("任务内容只能占一行");
+  }
+  const located = locateTaskLine(markdown, lineIndex, expectedContent);
+  const { lines, match } = located;
+  lines[located.lineIndex] =
+    `${match[1]}+ [${match[2]}]${content ? ` ${content}` : ""}`;
+  return lines.join("\n");
+}
+
+export function removeTask(
+  markdown: string,
+  lineIndex: number,
+  expectedContent: string,
+): string {
+  const located = locateTaskLine(markdown, lineIndex, expectedContent);
+  located.lines.splice(located.lineIndex, 1);
+  return located.lines.join("\n");
+}
+
+export function convertTaskToBullet(
+  markdown: string,
+  lineIndex: number,
+  expectedContent: string,
+): string {
+  const located = locateTaskLine(markdown, lineIndex, expectedContent);
+  const { lines, match } = located;
+  const content = match[3] ?? "";
+  lines[located.lineIndex] = `${match[1]}+${content ? ` ${content}` : " "}`;
+  return lines.join("\n");
+}
+
+export function appendTask(markdown: string, content: string): string {
+  const normalized = content.trim();
+  if (!normalized || /[\r\n]/.test(normalized)) {
+    throw new Error("请输入单行任务内容");
+  }
+  const base = markdown.trimEnd();
+  return `${base}${base ? "\n" : ""}+ [ ] ${normalized}\n`;
+}
+
+export type TaskBucket = "current" | "overdue" | "upcoming" | "note";
+
+/**
+ * Reflect treats a bare task in any past daily note as still current. Only an
+ * explicit past [[YYYY-MM-DD]] date makes a task overdue.
+ */
+export function taskBucket(task: MarkdownTask, today: string): TaskBucket {
+  if (task.explicitDate && task.explicitDate < today) return "overdue";
+  if (task.dueDate && task.dueDate > today) return "upcoming";
+  if (task.dueDate) return "current";
+  return "note";
 }
 
 export type ConflictResolution = "ours" | "theirs" | "both";
@@ -229,6 +364,26 @@ export function formatDailyTitle(date: string): string {
     day: "numeric",
     weekday: "long",
   }).format(value);
+}
+
+export function dailyNoteContent(
+  date: string,
+  startWithBullet: boolean,
+): string {
+  return `# ${formatDailyTitle(date)}\n\n${startWithBullet ? "- " : ""}`;
+}
+
+export function isEmptyDailyNoteDraft(
+  markdown: string,
+  date: string,
+): boolean {
+  const title = `# ${formatDailyTitle(date)}`;
+  const normalized = markdown.replace(/\r\n/g, "\n").trimEnd();
+  if (!normalized.startsWith(title)) {
+    return false;
+  }
+  const remainder = normalized.slice(title.length).trim();
+  return remainder === "" || /^[-+*]$/.test(remainder);
 }
 
 export function localDateKey(date = new Date()): string {

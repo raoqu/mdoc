@@ -41,7 +41,7 @@ func assetReferences(name string, content string) bool {
 }
 
 func (s *server) classifyAsset(name string) (string, error) {
-	rows, err := s.db.Query(`SELECT content,private FROM documents WHERE trashed=0`)
+	rows, err := s.database().Query(`SELECT content,private FROM documents WHERE trashed=0`)
 	if err != nil {
 		return "skip-private", err
 	}
@@ -250,7 +250,7 @@ func (s *server) describeAssets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "add an AI provider before describing assets", 400)
 		return
 	}
-	entries, err := os.ReadDir("data/uploads")
+	entries, err := os.ReadDir(s.uploadsDir())
 	if errorsIsNotExist(err) {
 		jsonOut(w, assetDescriptionOutcome{})
 		return
@@ -279,7 +279,7 @@ func (s *server) describeAssets(w http.ResponseWriter, r *http.Request) {
 			outcome.SkippedUnreferenced++
 			continue
 		}
-		path := filepath.Join("data/uploads", name)
+		path := filepath.Join(s.uploadsDir(), name)
 		data, readErr := os.ReadFile(path)
 		if readErr != nil || len(data) > 20<<20 {
 			outcome.Refused++

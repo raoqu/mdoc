@@ -12,7 +12,21 @@
 ./dev.sh
 ```
 
-脚本会同时启动 Go API 与前端开发服务器，并把前端的 `/api`、`/uploads`、`/site` 请求自动代理到后端。按 `Ctrl+C` 会同时停止两个进程。笔记保存在 `data/mdocman.db`，上传图片保存在 `data/uploads/`。
+脚本会同时启动 Go API 与前端开发服务器，并把前端的 `/api`、`/uploads`、`/site`
+请求自动代理到后端。按 `Ctrl+C` 会同时停止两个进程。数据目录固定为
+`~/.mdoc/`：SQLite 数据库直接保存在该目录，上传图片和音频分别保存在
+`~/.mdoc/uploads/` 与 `~/.mdoc/audio-memos/`。
+
+左侧栏底部显示当前知识库。点击后可切换已有知识库、调整知识库颜色、在 Finder
+中定位或新建知识库；当前选择记录在 `~/.mdoc/workspace.json`，重启后会自动恢复。
+
+传入 Markdown 文件或目录时，`dev.sh` 会跳过前端构建和 pnpm，直接通过 Go
+开发运行模式启动预览：
+
+```bash
+./dev.sh ./README.md
+./dev.sh ./docs
+```
 
 生产构建与清理：
 
@@ -21,7 +35,7 @@
 ./clean.sh
 ```
 
-构建会生成 `dist/bin/mdoc`，其中已经内嵌预渲染首页和全部浏览器资源。
+构建会在项目根目录生成 `./mdoc`，其中已经内嵌预渲染首页和全部浏览器资源。
 部署管理端时只需复制这一个二进制文件，运行后访问 `http://localhost:8080/`；
 无需额外部署前端目录，也不需要在运行机器上安装 Node.js。`dev.sh` 仍使用独立的
 Vinext 开发服务器和 HMR，不受生产内嵌方式影响。
@@ -41,22 +55,33 @@ DEPLOY_TARGET=user@host:/var/www/notes ./deploy.sh
 
 管理界面的“发布含目录”开关决定静态页面是否生成左侧目录栏。
 
-旧版 `data/notebooks.json` 会在 SQLite 数据库为空时自动迁移，迁移完成后以数据库为准。
+首次使用固定数据目录时，如果 `~/.mdoc/mdocman.db` 尚不存在，程序会从启动目录
+下旧版 `data/mdocman.db` 创建一致的 SQLite 快照，并复制旧附件、音频和
+`notebooks.json`。旧目录不会被删除。
 
 ## 命令行预览
 
-构建后可直接预览一个 Markdown 文件或目录：
+开发时无需完整构建即可预览一个 Markdown 文件或目录：
 
 ```bash
-dist/bin/mdoc ./README.md
-dist/bin/mdoc ./docs
+./dev.sh ./README.md
+./dev.sh ./docs
 ```
 
-命令会启动仅监听本机的临时服务并自动打开浏览器。目录优先显示其中的
+生产构建后也可以使用 `./mdoc <路径>` 启动相同的预览。命令会启动仅监听本机的
+临时服务并自动打开浏览器。目录优先显示其中的
 `README.md` 或 `index.md`，否则显示可浏览的文件列表。Markdown 文件的 URL
 保持原有目录结构，因此文档内指向其他本地 Markdown 文件的相对链接仍可继续
 访问预览；图片等相对资源也会正常加载。可通过 `MDOC_PORT=8088` 指定端口，
 通过 `MDOC_NO_BROWSER=1` 禁止自动打开浏览器。
+
+预览页右上角默认只显示主题图标，点击后可在弹出菜单中切换“默认 / 护眼 / 暗色 /
+雅黑紧凑”主题，选择会保存在浏览器本地。“雅黑紧凑”在 Windows 上优先使用
+微软雅黑，在 macOS 上回退到苹方；正文采用 14px 字号和 16px 总行高，表格、
+代码和引用采用 12px 字号和 14px 总行高。
+主题样式位于项目根目录的 `themes/`：`default.css` 定义完整的颜色与排版变量，
+其他主题 CSS 只需覆盖需要变化的变量。新增主题时，同时在
+`cmd/mdocman/preview_theme.go` 的 `previewThemes` 中登记名称即可。
 
 数据库结构和数据流参见 [docs/architecture.md](docs/architecture.md)。
 完整操作说明参见 [docs/使用说明.md](docs/使用说明.md)。

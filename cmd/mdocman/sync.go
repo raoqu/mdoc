@@ -62,7 +62,7 @@ func (s *server) loadSyncConfig(notebookID string) (syncConfig, string, error) {
 	var config syncConfig
 	var auto int
 	var account string
-	err := s.db.QueryRow(`SELECT notebook_id,remote_url,branch,status,last_error,last_sync_at,auto_sync,credential_account FROM sync_configs WHERE notebook_id=?`, notebookID).Scan(&config.NotebookID, &config.RemoteURL, &config.Branch, &config.Status, &config.LastError, &config.LastSyncAt, &auto, &account)
+	err := s.database().QueryRow(`SELECT notebook_id,remote_url,branch,status,last_error,last_sync_at,auto_sync,credential_account FROM sync_configs WHERE notebook_id=?`, notebookID).Scan(&config.NotebookID, &config.RemoteURL, &config.Branch, &config.Status, &config.LastError, &config.LastSyncAt, &auto, &account)
 	config.AutoSync = auto != 0
 	return config, account, err
 }
@@ -108,7 +108,7 @@ func (s *server) syncSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		_, err := s.db.Exec(`INSERT INTO sync_configs(notebook_id,remote_url,branch,status,last_error,last_sync_at,auto_sync,credential_account) VALUES(?,?,?,'disconnected','','',?,?) ON CONFLICT(notebook_id) DO UPDATE SET remote_url=excluded.remote_url,branch=excluded.branch,auto_sync=excluded.auto_sync,credential_account=CASE WHEN excluded.credential_account='' THEN sync_configs.credential_account ELSE excluded.credential_account END`, input.NotebookID, strings.TrimSpace(input.RemoteURL), input.Branch, input.AutoSync, account)
+		_, err := s.database().Exec(`INSERT INTO sync_configs(notebook_id,remote_url,branch,status,last_error,last_sync_at,auto_sync,credential_account) VALUES(?,?,?,'disconnected','','',?,?) ON CONFLICT(notebook_id) DO UPDATE SET remote_url=excluded.remote_url,branch=excluded.branch,auto_sync=excluded.auto_sync,credential_account=CASE WHEN excluded.credential_account='' THEN sync_configs.credential_account ELSE excluded.credential_account END`, input.NotebookID, strings.TrimSpace(input.RemoteURL), input.Branch, input.AutoSync, account)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -118,7 +118,7 @@ func (s *server) syncSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		notebookID := r.URL.Query().Get("notebookId")
 		_, account, _ := s.loadSyncConfig(notebookID)
-		_, err := s.db.Exec(`DELETE FROM sync_configs WHERE notebook_id=?`, notebookID)
+		_, err := s.database().Exec(`DELETE FROM sync_configs WHERE notebook_id=?`, notebookID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -219,7 +219,7 @@ func (s *server) exportSyncProjection(notebookID, repo string) error {
 			return err
 		}
 	}
-	rows, err := s.db.Query(`SELECT id,COALESCE(folder_id,''),title,content FROM documents WHERE notebook_id=? AND trashed=0 ORDER BY position`, notebookID)
+	rows, err := s.database().Query(`SELECT id,COALESCE(folder_id,''),title,content FROM documents WHERE notebook_id=? AND trashed=0 ORDER BY position`, notebookID)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func (s *server) exportSyncProjection(notebookID, repo string) error {
 		manifest.Documents = append(manifest.Documents, syncManifestDocument{ID: id, Title: title, FolderID: folderID, Kind: kind})
 	}
 	rows.Close()
-	templates, err := s.db.Query(`SELECT id,title,content FROM templates WHERE notebook_id=? ORDER BY title`, notebookID)
+	templates, err := s.database().Query(`SELECT id,title,content FROM templates WHERE notebook_id=? ORDER BY title`, notebookID)
 	if err == nil {
 		for templates.Next() {
 			var id, title, content string
@@ -260,10 +260,10 @@ func (s *server) exportSyncProjection(notebookID, repo string) error {
 		}
 		templates.Close()
 	}
-	if err = copySyncTree("data/uploads", filepath.Join(repo, "assets", "uploads")); err != nil {
+	if err = copySyncTree(s.uploadsDir(), filepath.Join(repo, "assets", "uploads")); err != nil {
 		return err
 	}
-	if err = copySyncTree("data/audio-memos", filepath.Join(repo, "assets", "audio-memos")); err != nil {
+	if err = copySyncTree(s.audioMemosDir(), filepath.Join(repo, "assets", "audio-memos")); err != nil {
 		return err
 	}
 	manifestBytes, _ := json.MarshalIndent(manifest, "", "  ")
@@ -291,11 +291,11 @@ func (s *server) importSyncProjection(notebookID, repo string) error {
 		return fmt.Errorf("the backup manifest needs review before it can be imported")
 	}
 	var defaultFolder string
-	if err = s.db.QueryRow(`SELECT id FROM folders WHERE notebook_id=? ORDER BY position LIMIT 1`, notebookID).Scan(&defaultFolder); err != nil {
+	if err = s.database().QueryRow(`SELECT id FROM folders WHERE notebook_id=? ORDER BY position LIMIT 1`, notebookID).Scan(&defaultFolder); err != nil {
 		return err
 	}
 	now := time.Now().Format(time.RFC3339Nano)
-	tx, err := s.db.Begin()
+	tx, err := s.database().Begin()
 	if err != nil {
 		return err
 	}
@@ -332,10 +332,10 @@ func (s *server) importSyncProjection(notebookID, repo string) error {
 			return err
 		}
 	}
-	if err = copySyncTree(filepath.Join(repo, "assets", "uploads"), "data/uploads"); err != nil {
+	if err = copySyncTree(filepath.Join(repo, "assets", "uploads"), s.uploadsDir()); err != nil {
 		return err
 	}
-	if err = copySyncTree(filepath.Join(repo, "assets", "audio-memos"), "data/audio-memos"); err != nil {
+	if err = copySyncTree(filepath.Join(repo, "assets", "audio-memos"), s.audioMemosDir()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -457,7 +457,7 @@ func (s *server) performSync(ctx context.Context, config syncConfig, account str
 	} else {
 		config.Status = "backed_up"
 	}
-	_, _ = s.db.Exec(`UPDATE sync_configs SET status=?,last_error='',last_sync_at=? WHERE notebook_id=?`, config.Status, config.LastSyncAt, config.NotebookID)
+	_, _ = s.database().Exec(`UPDATE sync_configs SET status=?,last_error='',last_sync_at=? WHERE notebook_id=?`, config.Status, config.LastSyncAt, config.NotebookID)
 	return config, nil
 }
 
@@ -472,7 +472,7 @@ func (s *server) syncRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backup is not connected", 400)
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE sync_configs SET status='backing_up',last_error='' WHERE notebook_id=?`, notebookID)
+	_, _ = s.database().Exec(`UPDATE sync_configs SET status='backing_up',last_error='' WHERE notebook_id=?`, notebookID)
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 	config, err = s.performSync(ctx, config, account)
@@ -482,7 +482,7 @@ func (s *server) syncRun(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(lower, "network") || strings.Contains(lower, "could not resolve") || strings.Contains(lower, "connection") {
 			status = "offline"
 		}
-		_, _ = s.db.Exec(`UPDATE sync_configs SET status=?,last_error=? WHERE notebook_id=?`, status, err.Error(), notebookID)
+		_, _ = s.database().Exec(`UPDATE sync_configs SET status=?,last_error=? WHERE notebook_id=?`, status, err.Error(), notebookID)
 		http.Error(w, err.Error(), 502)
 		return
 	}

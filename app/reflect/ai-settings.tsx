@@ -72,7 +72,7 @@ export function AiSettings({ providers, onChange, onNotice }: AiSettingsProps) {
   return (
     <section className="ai-settings-section">
       <h2>AI 供应商</h2>
-      <p className="settings-section-copy">直接使用你自己的 API 密钥。密钥进入操作系统钥匙串，不写入浏览器、数据库或 Markdown。</p>
+      <p className="settings-section-copy">直接使用你自己的 API 密钥。密钥进入操作系统钥匙串，不写入浏览器、知识库或 Markdown。</p>
       <div className="provider-list">
         {providers.map((item) => (
           <div className="provider-row" key={item.id}>

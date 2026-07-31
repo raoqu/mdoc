@@ -22,8 +22,6 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/parser"
 	_ "modernc.org/sqlite"
 )
 
@@ -54,13 +52,17 @@ type Notebook struct {
 	Folders     []Folder `json:"folders"`
 }
 type server struct {
-	db *sql.DB
-	md goldmark.Markdown
+	db        *sql.DB
+	databases *databaseManager
+	dataDir   string
+	md        goldmark.Markdown
 }
 
-func openDB() (*sql.DB, error) {
-	os.MkdirAll("data", 0755)
-	db, err := sql.Open("sqlite", "data/mdocman.db?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
+func openDBAt(databasePath string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(databasePath), 0700); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", databasePath+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS audio_memos(id TEXT PRIMARY KEY,notebook_id TEXT NOT 
 CREATE TABLE IF NOT EXISTS sync_configs(notebook_id TEXT PRIMARY KEY,remote_url TEXT NOT NULL,branch TEXT NOT NULL DEFAULT 'main',status TEXT NOT NULL DEFAULT 'disconnected',last_error TEXT NOT NULL DEFAULT '',last_sync_at TEXT NOT NULL DEFAULT '',auto_sync INTEGER NOT NULL DEFAULT 1,credential_account TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(notebook_id,parent_id,position);CREATE INDEX IF NOT EXISTS idx_docs_folder ON documents(notebook_id,folder_id,position);`
 	if _, err = db.Exec(schema); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	for _, migration := range []string{
@@ -89,6 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(notebook_id,parent_id,po
 	} {
 		if _, migrationErr := db.Exec(migration); migrationErr != nil &&
 			!strings.Contains(strings.ToLower(migrationErr.Error()), "duplicate column") {
+			_ = db.Close()
 			return nil, migrationErr
 		}
 	}
@@ -107,13 +111,38 @@ INSERT INTO documents_fts(document_id,title,content)
 SELECT d.id,d.title,d.content FROM documents d
 WHERE NOT EXISTS(SELECT 1 FROM documents_fts f WHERE f.document_id=d.id);`
 	if _, err = db.Exec(ftsSchema); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
+	_ = os.Chmod(databasePath, 0600)
 	return db, err
 }
 
+func (s *server) database() *sql.DB {
+	if s.databases != nil {
+		return s.databases.current()
+	}
+	return s.db
+}
+
+func (s *server) workspacePath(parts ...string) string {
+	base := s.dataDir
+	if base == "" {
+		base = "data"
+	}
+	return filepath.Join(append([]string{base}, parts...)...)
+}
+
+func (s *server) uploadsDir() string {
+	return s.workspacePath("uploads")
+}
+
+func (s *server) audioMemosDir() string {
+	return s.workspacePath("audio-memos")
+}
+
 func (s *server) load() ([]Notebook, error) {
-	rows, err := s.db.Query(`SELECT id,title,description,accent FROM notebooks ORDER BY position`)
+	rows, err := s.database().Query(`SELECT id,title,description,accent FROM notebooks ORDER BY position`)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +162,7 @@ func (s *server) load() ([]Notebook, error) {
 	return books, rows.Err()
 }
 func (s *server) loadFolders(book string) ([]Folder, error) {
-	rows, err := s.db.Query(`SELECT id,parent_id,title FROM folders WHERE notebook_id=? ORDER BY position`, book)
+	rows, err := s.database().Query(`SELECT id,parent_id,title FROM folders WHERE notebook_id=? ORDER BY position`, book)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +184,7 @@ func (s *server) loadFolders(book string) ([]Folder, error) {
 		all[x.f.ID] = x
 		order = append(order, x.f.ID)
 	}
-	docs, err := s.db.Query(`SELECT id,folder_id,title,content,updated_at,created_at,pinned,trashed,private,aliases_json,revision FROM documents WHERE notebook_id=? ORDER BY position`, book)
+	docs, err := s.database().Query(`SELECT id,folder_id,title,content,updated_at,created_at,pinned,trashed,private,aliases_json,revision FROM documents WHERE notebook_id=? ORDER BY position`, book)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +244,7 @@ func (s *server) save(books []Notebook) error {
 	messages := []messageRow{}
 	captureTokens := []captureTokenRow{}
 	audioMemos := []audioMemoRow{}
-	if rows, e := s.db.Query(`SELECT token,document_id,created_at FROM shares`); e == nil {
+	if rows, e := s.database().Query(`SELECT token,document_id,created_at FROM shares`); e == nil {
 		for rows.Next() {
 			var x shareRow
 			if rows.Scan(&x.token, &x.documentID, &x.createdAt) == nil {
@@ -224,7 +253,7 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	if rows, e := s.db.Query(`SELECT id,notebook_id,title,content,created_at FROM templates`); e == nil {
+	if rows, e := s.database().Query(`SELECT id,notebook_id,title,content,created_at FROM templates`); e == nil {
 		for rows.Next() {
 			var x templateRow
 			if rows.Scan(&x.id, &x.notebookID, &x.title, &x.content, &x.createdAt) == nil {
@@ -233,7 +262,7 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	if rows, e := s.db.Query(`SELECT id,notebook_id,title,created_at,updated_at FROM chat_conversations`); e == nil {
+	if rows, e := s.database().Query(`SELECT id,notebook_id,title,created_at,updated_at FROM chat_conversations`); e == nil {
 		for rows.Next() {
 			var x conversationRow
 			if rows.Scan(&x.id, &x.notebookID, &x.title, &x.createdAt, &x.updatedAt) == nil {
@@ -242,7 +271,7 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	if rows, e := s.db.Query(`SELECT id,conversation_id,role,content,created_at FROM chat_messages`); e == nil {
+	if rows, e := s.database().Query(`SELECT id,conversation_id,role,content,created_at FROM chat_messages`); e == nil {
 		for rows.Next() {
 			var x messageRow
 			if rows.Scan(&x.id, &x.conversationID, &x.role, &x.content, &x.createdAt) == nil {
@@ -251,7 +280,7 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	if rows, e := s.db.Query(`SELECT id,notebook_id,label,token_hash,key_hint,created_at FROM capture_tokens`); e == nil {
+	if rows, e := s.database().Query(`SELECT id,notebook_id,label,token_hash,key_hint,created_at FROM capture_tokens`); e == nil {
 		for rows.Next() {
 			var x captureTokenRow
 			if rows.Scan(&x.id, &x.notebookID, &x.label, &x.tokenHash, &x.keyHint, &x.createdAt) == nil {
@@ -260,7 +289,7 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	if rows, e := s.db.Query(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos`); e == nil {
+	if rows, e := s.database().Query(`SELECT id,notebook_id,recorded_date,file_name,mime_type,status,error,transcript_document_id,created_at FROM audio_memos`); e == nil {
 		for rows.Next() {
 			var x audioMemoRow
 			if rows.Scan(&x.id, &x.notebookID, &x.date, &x.fileName, &x.mimeType, &x.status, &x.errorText, &x.transcriptID, &x.createdAt) == nil {
@@ -269,7 +298,7 @@ func (s *server) save(books []Notebook) error {
 		}
 		rows.Close()
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.database().Begin()
 	if err != nil {
 		return err
 	}
@@ -336,7 +365,7 @@ func cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,PUT,POST,PATCH,DELETE,OPTIONS")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
@@ -382,7 +411,7 @@ func (s *server) documentByID(id string) (Doc, error) {
 	var d Doc
 	var pinned, trashed, private int
 	var aliasesJSON string
-	err := s.db.QueryRow(`SELECT id,title,content,updated_at,created_at,pinned,trashed,private,aliases_json,revision FROM documents WHERE id=?`, id).
+	err := s.database().QueryRow(`SELECT id,title,content,updated_at,created_at,pinned,trashed,private,aliases_json,revision FROM documents WHERE id=?`, id).
 		Scan(&d.ID, &d.Title, &d.Content, &d.UpdatedAt, &d.CreatedAt, &pinned, &trashed, &private, &aliasesJSON, &d.Revision)
 	if err != nil {
 		return d, err
@@ -422,7 +451,7 @@ func (s *server) document(w http.ResponseWriter, r *http.Request) {
 		}
 		aliasesJSON, _ := json.Marshal(incoming.Aliases)
 		updated := time.Now().Format(time.RFC3339Nano)
-		result, err := s.db.Exec(`UPDATE documents SET title=?,content=?,updated_at=?,pinned=?,trashed=?,private=?,aliases_json=?,revision=revision+1 WHERE id=? AND revision=?`,
+		result, err := s.database().Exec(`UPDATE documents SET title=?,content=?,updated_at=?,pinned=?,trashed=?,private=?,aliases_json=?,revision=revision+1 WHERE id=? AND revision=?`,
 			incoming.Title, incoming.Content, updated, incoming.Pinned, incoming.Trashed, incoming.Private, string(aliasesJSON), id, incoming.Revision)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -474,7 +503,7 @@ func (s *server) search(w http.ResponseWriter, r *http.Request) {
 		terms[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"*`
 	}
 	expression := strings.Join(terms, " AND ")
-	rows, err := s.db.Query(`SELECT d.id,d.title,
+	rows, err := s.database().Query(`SELECT d.id,d.title,
 snippet(documents_fts,2,'<mark>','</mark>','…',18),d.updated_at
 FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id
 WHERE documents_fts MATCH ? AND d.trashed=0 AND (?='' OR d.notebook_id=?)
@@ -518,8 +547,8 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	name := fmt.Sprintf("%d-%s", time.Now().UnixNano(), safeName(h.Filename))
-	os.MkdirAll("data/uploads", 0755)
-	out, e := os.Create(filepath.Join("data/uploads", name))
+	os.MkdirAll(s.uploadsDir(), 0700)
+	out, e := os.Create(filepath.Join(s.uploadsDir(), name))
 	if e == nil {
 		_, e = io.Copy(out, f)
 		out.Close()
@@ -715,17 +744,16 @@ func slug(s string) string {
 }
 
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{{.Title}}</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body)"></script><script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';document.querySelectorAll('code.language-mermaid').forEach(e=>{const p=e.parentElement,d=document.createElement('div');d.className='mermaid';d.textContent=e.textContent;p.replaceWith(d)});mermaid.initialize({startOnLoad:true,theme:'neutral'});</script></head><body><header><a href="/">墨笺</a><nav>{{.Book}}</nav></header><div class="layout">{{if .Sidebar}}<aside><b>目录</b>{{range .Links}}<a {{if eq .URL $.Current}}class="active"{{end}} href="{{.URL}}">{{.Title}}</a>{{end}}</aside>{{end}}<main><article>{{.HTML}}</article></main></div><footer>由 Mdocman 增量生成 · {{.Date}}</footer></body></html>`
-const css = `:root{color:#30332e;background:#faf9f5;font-family:Georgia,"Songti SC",serif}body{margin:0}header{height:64px;border-bottom:1px solid #e5e3dc;display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,calc((100% - 1080px)/2));font-family:system-ui}a{color:#45604a;text-decoration:none}.layout{display:flex;max-width:1080px;margin:0 auto}.layout aside{width:220px;flex:none;padding:70px 24px;border-right:1px solid #e5e3dc;font:13px system-ui}.layout aside b{display:block;margin-bottom:14px}.layout aside a{display:block;padding:7px 9px;border-radius:5px}.layout aside a.active{background:#e4e9e2;font-weight:600}.layout main{width:100%;max-width:820px;margin:70px auto;padding:0 36px;min-height:70vh}article{font-size:18px;line-height:1.9}img{max-width:100%;border-radius:8px}table{border-collapse:collapse;width:100%;display:block;overflow:auto}th,td{border:1px solid #d8d8d2;padding:8px 12px}th{background:#efeee9}pre{background:#282b27;color:#e8e9e5;padding:18px;overflow:auto;border-radius:8px}code{font:14px ui-monospace,monospace}p code{background:#ecebe6;color:#7d4d3a;padding:2px 5px;border-radius:4px}blockquote{border-left:3px solid #78907c;background:#f0f3ed;margin:25px 0;padding:14px 20px}footer{text-align:center;color:#aaa;font:12px system-ui;padding:35px}@media(max-width:760px){.layout aside{display:none}.layout main{padding:0 22px}}`
 
-const previewPage = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><style>{{.CSS}}</style></head><body><div class="layout"><main><article>{{.HTML}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>`
-const previewContentSecurityPolicy = "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+const previewPage = `<!doctype html><html lang="zh-CN" data-preview-theme="default"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><link rel="stylesheet" href="/_mdoc/themes/default.css"><link id="preview-theme-stylesheet" rel="stylesheet" href="/_mdoc/themes/default.css"><script defer src="/_mdoc/preview-theme.js"></script><script type="module" src="/_mdoc/preview-mermaid.js"></script></head><body>` + previewThemeMenu + `<div class="layout"><main><article>{{.HTML}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>`
+const previewContentSecurityPolicy = "default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net; base-uri 'none'; form-action 'none'"
 
 func writePreviewPage(w http.ResponseWriter, title string, html template.HTML) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", previewContentSecurityPolicy)
 	t := template.Must(template.New("preview").Parse(previewPage))
-	if err := t.Execute(w, map[string]any{"Title": title, "HTML": html, "CSS": template.CSS(css)}); err != nil {
+	if err := t.Execute(w, map[string]any{"Title": title, "HTML": html, "Themes": previewThemes}); err != nil {
 		log.Printf("preview render: %v", err)
 	}
 }
@@ -747,7 +775,7 @@ func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 		content = r.FormValue("content")
 		book = strings.TrimSpace(r.FormValue("book"))
 	} else if r.Method == http.MethodGet {
-		err := s.db.QueryRow(`SELECT d.title,d.content,n.title FROM documents d JOIN notebooks n ON n.id=d.notebook_id WHERE d.id=? AND d.trashed=0`, id).Scan(&title, &content, &book)
+		err := s.database().QueryRow(`SELECT d.title,d.content,n.title FROM documents d JOIN notebooks n ON n.id=d.notebook_id WHERE d.id=? AND d.trashed=0`, id).Scan(&title, &content, &book)
 		if err == sql.ErrNoRows {
 			http.Error(w, "document not found", http.StatusNotFound)
 			return
@@ -793,7 +821,7 @@ func (s *server) share(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var title, content, book, token string
-	e := s.db.QueryRow(`SELECT d.title,d.content,n.title,COALESCE(sh.token,'') FROM documents d JOIN notebooks n ON n.id=d.notebook_id LEFT JOIN shares sh ON sh.document_id=d.id WHERE d.id=?`, in.DocumentID).Scan(&title, &content, &book, &token)
+	e := s.database().QueryRow(`SELECT d.title,d.content,n.title,COALESCE(sh.token,'') FROM documents d JOIN notebooks n ON n.id=d.notebook_id LEFT JOIN shares sh ON sh.document_id=d.id WHERE d.id=?`, in.DocumentID).Scan(&title, &content, &book, &token)
 	if e == sql.ErrNoRows {
 		http.Error(w, "document not found", 404)
 		return
@@ -808,7 +836,7 @@ func (s *server) share(w http.ResponseWriter, r *http.Request) {
 			if e != nil {
 				break
 			}
-			_, e = s.db.Exec(`INSERT INTO shares(token,document_id,created_at) VALUES(?,?,?)`, token, in.DocumentID, time.Now().Format(time.RFC3339))
+			_, e = s.database().Exec(`INSERT INTO shares(token,document_id,created_at) VALUES(?,?,?)`, token, in.DocumentID, time.Now().Format(time.RFC3339))
 			if e == nil {
 				break
 			}
@@ -906,10 +934,10 @@ func (s *server) build(w http.ResponseWriter, r *http.Request) {
 	}
 	idx.WriteString(`</ul></main>`)
 	os.WriteFile("public-site/index.html", []byte(idx.String()), 0644)
-	if b, e := os.ReadDir("data/uploads"); e == nil {
+	if b, e := os.ReadDir(s.uploadsDir()); e == nil {
 		os.MkdirAll("public-site/uploads", 0755)
 		for _, x := range b {
-			src, _ := os.Open(filepath.Join("data/uploads", x.Name()))
+			src, _ := os.Open(filepath.Join(s.uploadsDir(), x.Name()))
 			dst, _ := os.Create(filepath.Join("public-site/uploads", x.Name()))
 			io.Copy(dst, src)
 			src.Close()
@@ -923,11 +951,11 @@ func (s *server) build(w http.ResponseWriter, r *http.Request) {
 
 func migrateJSON(s *server) {
 	var n int
-	s.db.QueryRow(`SELECT COUNT(*) FROM notebooks`).Scan(&n)
+	s.database().QueryRow(`SELECT COUNT(*) FROM notebooks`).Scan(&n)
 	if n > 0 {
 		return
 	}
-	b, e := os.ReadFile("data/notebooks.json")
+	b, e := os.ReadFile(s.workspacePath("notebooks.json"))
 	if e != nil {
 		return
 	}
@@ -937,19 +965,26 @@ func migrateJSON(s *server) {
 	}
 }
 func main() {
-	md := goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote, extension.Typographer), goldmark.WithParserOptions(parser.WithAutoHeadingID()))
+	md := newMarkdown()
 	if target, ok := pathPreviewArgument(os.Args[1:]); ok {
 		if err := servePathPreview(target, md, os.Stdout); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	db, e := openDB()
+	workspaceDir, e := defaultWorkspaceDirectory()
 	if e != nil {
 		log.Fatal(e)
 	}
-	defer db.Close()
-	s := &server{db: db, md: md}
+	if e = migrateLegacyWorkspace(workspaceDir, "data"); e != nil {
+		log.Fatal(e)
+	}
+	databases, e := newDatabaseManager(workspaceDir)
+	if e != nil {
+		log.Fatal(e)
+	}
+	defer databases.close()
+	s := &server{databases: databases, dataDir: workspaceDir, md: md}
 	migrateJSON(s)
 	if cliRequested(s) {
 		return
@@ -958,6 +993,8 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+	http.HandleFunc("/api/knowledge-bases", cors(s.knowledgeBaseCatalog))
+	http.HandleFunc("/api/knowledge-bases/reveal", cors(s.revealKnowledgeBase))
 	http.HandleFunc("/api/notebooks", cors(s.notebooks))
 	http.HandleFunc("/api/documents/", cors(s.document))
 	http.HandleFunc("/api/search", cors(s.search))
@@ -978,16 +1015,17 @@ func main() {
 	http.HandleFunc("/api/sync/run", cors(s.syncRun))
 	http.HandleFunc("/api/assets/describe", cors(s.describeAssets))
 	http.HandleFunc("/api/preview/", cors(s.previewDocument))
+	http.HandleFunc(previewAssetsPrefix, servePreviewAsset)
 	http.HandleFunc("/api/upload", cors(s.upload))
 	http.HandleFunc("/api/import", cors(s.importMD))
 	http.HandleFunc("/api/export", cors(s.exportMD))
 	http.HandleFunc("/api/build", cors(s.build))
 	http.HandleFunc("/api/share", cors(s.share))
-	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("data/uploads"))))
-	http.Handle("/audio/", http.StripPrefix("/audio/", http.FileServer(http.Dir("data/audio-memos"))))
+	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.uploadsDir()))))
+	http.Handle("/audio/", http.StripPrefix("/audio/", http.FileServer(http.Dir(s.audioMemosDir()))))
 	http.Handle("/site/", http.StripPrefix("/site/", http.FileServer(http.Dir("public-site"))))
 	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
 	http.Handle("/", embeddedFrontendHandler())
-	fmt.Printf("Mdocman API: http://localhost:%s\n", port)
+	fmt.Printf("Mdocman API: http://localhost:%s\n知识库目录: %s\n当前知识库: %s\n", port, workspaceDir, knowledgeBaseLabel(databases.activeName()))
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

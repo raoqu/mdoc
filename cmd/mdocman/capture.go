@@ -34,7 +34,7 @@ func (s *server) captureTokens(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		notebookID := r.URL.Query().Get("notebookId")
-		rows, err := s.db.Query(`SELECT id,notebook_id,label,key_hint,created_at FROM capture_tokens WHERE (?='' OR notebook_id=?) ORDER BY created_at DESC`, notebookID, notebookID)
+		rows, err := s.database().Query(`SELECT id,notebook_id,label,key_hint,created_at FROM capture_tokens WHERE (?='' OR notebook_id=?) ORDER BY created_at DESC`, notebookID, notebookID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -71,7 +71,7 @@ func (s *server) captureTokens(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		now := time.Now().Format(time.RFC3339Nano)
-		_, err = s.db.Exec(`INSERT INTO capture_tokens(id,notebook_id,label,token_hash,key_hint,created_at) VALUES(?,?,?,?,?,?)`, id, input.NotebookID, strings.TrimSpace(input.Label), tokenDigest(token), keyHint(token), now)
+		_, err = s.database().Exec(`INSERT INTO capture_tokens(id,notebook_id,label,token_hash,key_hint,created_at) VALUES(?,?,?,?,?,?)`, id, input.NotebookID, strings.TrimSpace(input.Label), tokenDigest(token), keyHint(token), now)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -90,7 +90,7 @@ func (s *server) captureToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/capture/tokens/"), "/")
-	result, err := s.db.Exec(`DELETE FROM capture_tokens WHERE id=?`, id)
+	result, err := s.database().Exec(`DELETE FROM capture_tokens WHERE id=?`, id)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -109,14 +109,14 @@ func (s *server) captureNotebook(r *http.Request) (string, error) {
 	}
 	token := strings.TrimSpace(auth[len("Bearer "):])
 	var notebookID string
-	err := s.db.QueryRow(`SELECT notebook_id FROM capture_tokens WHERE token_hash=?`, tokenDigest(token)).Scan(&notebookID)
+	err := s.database().QueryRow(`SELECT notebook_id FROM capture_tokens WHERE token_hash=?`, tokenDigest(token)).Scan(&notebookID)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("invalid capture token")
 	}
 	return notebookID, err
 }
 
-func saveCaptureScreenshot(dataURL string) (string, error) {
+func (s *server) saveCaptureScreenshot(dataURL string) (string, error) {
 	if dataURL == "" {
 		return "", nil
 	}
@@ -133,10 +133,10 @@ func saveCaptureScreenshot(dataURL string) (string, error) {
 		ext = "jpg"
 	}
 	name := fmt.Sprintf("capture-%d.%s", time.Now().UnixNano(), ext)
-	if err = os.MkdirAll("data/uploads", 0755); err != nil {
+	if err = os.MkdirAll(s.uploadsDir(), 0700); err != nil {
 		return "", err
 	}
-	if err = os.WriteFile(filepath.Join("data/uploads", name), raw, 0644); err != nil {
+	if err = os.WriteFile(filepath.Join(s.uploadsDir(), name), raw, 0600); err != nil {
 		return "", err
 	}
 	return "/uploads/" + name, nil
@@ -211,7 +211,7 @@ func (s *server) capture(w http.ResponseWriter, r *http.Request) {
 	if input.CapturedAt == "" {
 		input.CapturedAt = time.Now().Format(time.RFC3339)
 	}
-	screenshot, err := saveCaptureScreenshot(input.Screenshot)
+	screenshot, err := s.saveCaptureScreenshot(input.Screenshot)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -221,7 +221,7 @@ func (s *server) capture(w http.ResponseWriter, r *http.Request) {
 	if targetID == "" {
 		targetID = "daily-" + date
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.database().Begin()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

@@ -11,7 +11,6 @@ import {
 } from "react";
 import {
   Archive,
-  Check,
   ChevronLeft,
   ChevronRight,
   Eye,
@@ -35,18 +34,26 @@ import { TemplateSettings } from "./template-settings";
 import { SyncSettings, type SyncConfig } from "./sync-settings";
 import type { StoredTemplate } from "./templates";
 import { CommandPalette } from "./command-palette";
+import { DayCalendar } from "./day-calendar";
 import {
   backlinksFor,
+  appendTask,
+  convertTaskToBullet,
+  dailyNoteContent,
+  editTask,
   excerpt,
   formatDailyTitle,
+  isEmptyDailyNoteDraft,
   localDateKey,
+  removeTask,
   renameWikiLinks,
   rescheduleTask,
   tagsIn,
-  tasksIn,
   titleFromMarkdown,
   toggleTask,
+  type MarkdownTask,
 } from "./markdown";
+import { dailyDatesFromDocuments } from "./month-grid";
 import {
   aliasesFromFrontmatter,
   joinFrontmatter,
@@ -68,7 +75,11 @@ import {
   type WorkspaceSettings,
   type WorkspaceView,
 } from "./types";
-import { WorkspaceSidebar } from "./workspace-sidebar";
+import {
+  WorkspaceSidebar,
+  type KnowledgeBaseCatalog,
+} from "./workspace-sidebar";
+import { TasksScreen } from "./tasks-screen";
 
 const ReflectEditor = dynamic(
   () => import("./reflect-editor").then((module) => module.ReflectEditor),
@@ -81,7 +92,7 @@ const ReflectEditor = dynamic(
 const WELCOME_NOTEBOOK: NotebookRecord = {
   id: "welcome",
   title: "我的知识库",
-  description: "本地 SQLite 笔记库",
+  description: "本地笔记空间",
   accent: "#6d5bd0",
   folders: [
     {
@@ -193,6 +204,11 @@ function normalizeNotebookMetadata(
 export function ReflectWorkspace() {
   const [notebooks, setNotebooks] = useState<NotebookRecord[]>([WELCOME_NOTEBOOK]);
   const [notebookId, setNotebookId] = useState(WELCOME_NOTEBOOK.id);
+  const [knowledgeBaseCatalog, setKnowledgeBaseCatalog] =
+    useState<KnowledgeBaseCatalog | null>(null);
+  const [knowledgeBaseSwitching, setKnowledgeBaseSwitching] = useState(false);
+  const [knowledgeBaseCreateOpen, setKnowledgeBaseCreateOpen] = useState(false);
+  const [knowledgeBaseName, setKnowledgeBaseName] = useState("新知识库");
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -244,6 +260,16 @@ export function ReflectWorkspace() {
   }, []);
 
   useEffect(() => {
+    fetch("/api/knowledge-bases")
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await response.text());
+        return (await response.json()) as KnowledgeBaseCatalog;
+      })
+      .then(setKnowledgeBaseCatalog)
+      .catch(() => setKnowledgeBaseCatalog(null));
+  }, []);
+
+  useEffect(() => {
     queueMicrotask(() => setSettings(loadSettings()));
     fetch("/api/notebooks")
       .then(async (response) => {
@@ -260,6 +286,121 @@ export function ReflectWorkspace() {
       })
       .catch(() => toast("后端暂不可用，当前显示本地示例数据"))
       .finally(() => setLoaded(true));
+  }, [toast]);
+
+  const switchKnowledgeBase = useCallback(
+    async (knowledgeBaseName: string) => {
+      if (
+        knowledgeBaseName === knowledgeBaseCatalog?.active ||
+        knowledgeBaseSwitching
+      ) {
+        return;
+      }
+      if (dirty || saving) {
+        toast("笔记正在保存，请稍后再切换知识库");
+        return;
+      }
+      setKnowledgeBaseSwitching(true);
+      try {
+        const response = await fetch("/api/knowledge-bases", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: knowledgeBaseName }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        window.location.reload();
+      } catch (error) {
+        setKnowledgeBaseSwitching(false);
+        toast(
+          error instanceof Error
+            ? error.message.trim() || "切换知识库失败"
+            : "切换知识库失败",
+        );
+      }
+    },
+    [
+      dirty,
+      knowledgeBaseCatalog?.active,
+      knowledgeBaseSwitching,
+      saving,
+      toast,
+    ],
+  );
+
+  const createKnowledgeBase = useCallback(async (name: string) => {
+    if (knowledgeBaseSwitching) return;
+    if (dirty || saving) {
+      toast("笔记正在保存，请稍后再新建知识库");
+      return;
+    }
+    if (!name.trim()) return;
+    setKnowledgeBaseSwitching(true);
+    try {
+      const response = await fetch("/api/knowledge-bases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      setKnowledgeBaseCreateOpen(false);
+      window.location.reload();
+    } catch (error) {
+      setKnowledgeBaseSwitching(false);
+      toast(
+        error instanceof Error
+          ? error.message.trim() || "新建知识库失败"
+          : "新建知识库失败",
+      );
+    }
+  }, [dirty, knowledgeBaseSwitching, saving, toast]);
+
+  const changeKnowledgeBaseColor = useCallback(
+    async (color: string) => {
+      const previousCatalog = knowledgeBaseCatalog;
+      if (!previousCatalog) return;
+      setKnowledgeBaseCatalog({
+        ...previousCatalog,
+        knowledgeBases: previousCatalog.knowledgeBases.map((knowledgeBase) =>
+          knowledgeBase.name === previousCatalog.active
+            ? { ...knowledgeBase, color }
+            : knowledgeBase,
+        ),
+      });
+      try {
+        const response = await fetch("/api/knowledge-bases", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: previousCatalog.active, color }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        setKnowledgeBaseCatalog(
+          (await response.json()) as KnowledgeBaseCatalog,
+        );
+      } catch (error) {
+        setKnowledgeBaseCatalog(previousCatalog);
+        toast(
+          error instanceof Error
+            ? error.message.trim() || "更新知识库颜色失败"
+            : "更新知识库颜色失败",
+        );
+      }
+    },
+    [knowledgeBaseCatalog, toast],
+  );
+
+  const revealKnowledgeBase = useCallback(async () => {
+    try {
+      const response = await fetch("/api/knowledge-bases/reveal", {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(await response.text());
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? error.message.trim() || "无法在 Finder 中显示知识库"
+          : "无法在 Finder 中显示知识库",
+      );
+    }
   }, [toast]);
 
   useEffect(() => {
@@ -638,8 +779,8 @@ export function ReflectWorkspace() {
     const id = crypto.randomUUID();
     const next: NotebookRecord = {
       id,
-      title: `新知识库 ${notebooks.length + 1}`,
-      description: "本地 SQLite 笔记库",
+      title: `新笔记空间 ${notebooks.length + 1}`,
+      description: "本地笔记空间",
       accent: "#6d5bd0",
       folders: [
         {
@@ -654,41 +795,8 @@ export function ReflectWorkspace() {
     mutateNotebooks((records) => [...records, next]);
     setNotebookId(id);
     navigate({ kind: "all-notes" });
-    toast("新知识库已创建");
+    toast("新笔记空间已创建");
   }, [mutateNotebooks, navigate, notebooks.length, toast]);
-
-  const ensureDaily = useCallback(
-    (date: string): string => {
-      const id = `daily-${date}`;
-      const existing = documents.find(({ document }) => document.id === id);
-      if (existing) {
-        return id;
-      }
-      const now = new Date().toISOString();
-      const document: DocumentRecord = {
-        id,
-        title: formatDailyTitle(date),
-        content: `# ${formatDailyTitle(date)}\n\n${settings.startWithBullet ? "- " : ""}`,
-        createdAt: now,
-        updatedAt: now,
-        revision: 0,
-      };
-      mutateNotebooks((records) =>
-        records.map((candidate) =>
-          candidate.id === notebook.id
-            ? addDocumentToFolder(
-                candidate,
-                `${candidate.id}-daily`,
-                "每日笔记",
-                document,
-              )
-            : candidate,
-        ),
-      );
-      return id;
-    },
-    [documents, mutateNotebooks, notebook.id, settings.startWithBullet],
-  );
 
   const appendDeepLinkLine = useCallback((rawText: string, task: boolean) => {
     const text = rawText.replace(/\s+/g, " ").trim().slice(0, 10_000);
@@ -740,12 +848,6 @@ export function ReflectWorkspace() {
     navigate({ kind: "daily", date });
     toast(task ? "任务已添加到今天" : "内容已添加到今天");
   }, [mutateNotebooks, navigate, notebook.id, toast]);
-
-  useEffect(() => {
-    if (loaded && view.kind === "daily") {
-      queueMicrotask(() => ensureDaily(view.date));
-    }
-  }, [ensureDaily, loaded, view]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -848,15 +950,128 @@ export function ReflectWorkspace() {
     }
   }, [toast]);
 
-  const selected =
-    view.kind === "note"
-      ? documents.find(({ document }) => document.id === view.documentId)
-      : view.kind === "daily"
-        ? documents.find(({ document }) => document.id === `daily-${view.date}`)
-        : undefined;
+  const dailyViewDate = view.kind === "daily" ? view.date : null;
+  const noteViewDocumentId =
+    view.kind === "note" ? view.documentId : null;
+  const dailyDraftOpenedAt = dailyViewDate
+    ? `${dailyViewDate}T12:00:00`
+    : "";
+  const selected = useMemo<DocumentLocation | undefined>(() => {
+    if (noteViewDocumentId) {
+      return documents.find(
+        ({ document }) => document.id === noteViewDocumentId,
+      );
+    }
+    if (!dailyViewDate) {
+      return undefined;
+    }
+    const documentId = `daily-${dailyViewDate}`;
+    const existing = documents.find(
+      ({ document }) => document.id === documentId,
+    );
+    if (existing) {
+      return existing;
+    }
+    const folder =
+      notebook.folders.find(
+        (candidate) => candidate.id === `${notebook.id}-daily`,
+      ) ?? {
+        id: `${notebook.id}-daily`,
+        title: "每日笔记",
+        open: true,
+        docs: [],
+        children: [],
+      };
+    return {
+      notebook,
+      folder,
+      document: {
+        id: documentId,
+        title: formatDailyTitle(dailyViewDate),
+        content: dailyNoteContent(
+          dailyViewDate,
+          settings.startWithBullet,
+        ),
+        createdAt: dailyDraftOpenedAt,
+        updatedAt: dailyDraftOpenedAt,
+        revision: 0,
+      },
+    };
+  }, [
+    dailyDraftOpenedAt,
+    dailyViewDate,
+    documents,
+    notebook,
+    noteViewDocumentId,
+    settings.startWithBullet,
+  ]);
 
   const changeDocument = useCallback(
     (documentId: string, markdown: string) => {
+      const dailyDate = /^daily-(\d{4}-\d{2}-\d{2})$/.exec(
+        documentId,
+      )?.[1];
+      const existing = documents.some(
+        ({ document }) => document.id === documentId,
+      );
+      if (
+        dailyDate &&
+        !existing &&
+        isEmptyDailyNoteDraft(markdown, dailyDate)
+      ) {
+        return;
+      }
+      if (dailyDate && !existing) {
+        const now = new Date().toISOString();
+        mutateNotebooks((records) =>
+          records.map((candidate) => {
+            if (candidate.id !== notebook.id) {
+              return candidate;
+            }
+            const latest = documentsInNotebook(candidate).find(
+              ({ document }) => document.id === documentId,
+            );
+            if (latest) {
+              return {
+                ...candidate,
+                folders: updateFolders(candidate.folders, (folder) => ({
+                  ...folder,
+                  docs: folder.docs.map((document) =>
+                    document.id === documentId
+                      ? {
+                          ...document,
+                          content: markdown,
+                          title: titleFromMarkdown(
+                            markdown,
+                            document.title,
+                          ),
+                          updatedAt: now,
+                        }
+                      : document,
+                  ),
+                })),
+              };
+            }
+            return addDocumentToFolder(
+              candidate,
+              `${candidate.id}-daily`,
+              "每日笔记",
+              {
+                id: documentId,
+                title: titleFromMarkdown(
+                  markdown,
+                  formatDailyTitle(dailyDate),
+                ),
+                content: markdown,
+                createdAt: now,
+                updatedAt: now,
+                revision: 0,
+              },
+            );
+          }),
+        );
+        return;
+      }
       mutateNotebooks(
         (records) =>
           updateDocument(records, documentId, (document) => ({
@@ -868,7 +1083,7 @@ export function ReflectWorkspace() {
         { documentIds: [documentId], structural: false },
       );
     },
-    [mutateNotebooks],
+    [documents, mutateNotebooks, notebook.id],
   );
 
   const patchDocument = useCallback(
@@ -892,47 +1107,161 @@ export function ReflectWorkspace() {
     [mutateNotebooks],
   );
 
-  const toggleDocumentTask = useCallback(
-    (documentId: string, line: number, expectedContent: string) => {
+  const applyTaskChanges = useCallback(
+    (
+      tasks: readonly MarkdownTask[],
+      transform: (markdown: string, task: MarkdownTask) => string,
+      fallbackMessage: string,
+    ) => {
+      if (tasks.length === 0) return;
       try {
+        const nextContent = new Map<string, string>();
+        for (const task of tasks) {
+          const source =
+            nextContent.get(task.documentId) ??
+            documents.find(
+              ({ document }) => document.id === task.documentId,
+            )?.document.content;
+          if (source === undefined) {
+            throw new Error("任务来源笔记不存在");
+          }
+          nextContent.set(task.documentId, transform(source, task));
+        }
+        const now = new Date().toISOString();
+        const documentIds = [...nextContent.keys()];
         mutateNotebooks(
           (records) =>
-            updateDocument(records, documentId, (document) => ({
-              ...document,
-              content: toggleTask(document.content, line, expectedContent),
-              updatedAt: new Date().toISOString(),
-            })),
-          { documentIds: [documentId], structural: false },
+            documentIds.reduce(
+              (current, documentId) =>
+                updateDocument(current, documentId, (document) => ({
+                  ...document,
+                  content: nextContent.get(documentId)!,
+                  updatedAt: now,
+                })),
+              records,
+            ),
+          { documentIds, structural: false },
         );
       } catch (error) {
-        toast(error instanceof Error ? error.message : "无法更新任务");
+        toast(error instanceof Error ? error.message : fallbackMessage);
       }
     },
-    [mutateNotebooks, toast],
+    [documents, mutateNotebooks, toast],
   );
 
-  const scheduleDocumentTask = useCallback(
-    (documentId: string, line: number, expectedContent: string, date: string) => {
-      try {
-        mutateNotebooks(
-          (records) =>
-            updateDocument(records, documentId, (document) => ({
-              ...document,
-              content: rescheduleTask(
-                document.content,
-                line,
-                expectedContent,
-                date || null,
-              ),
-              updatedAt: new Date().toISOString(),
-            })),
-          { documentIds: [documentId], structural: false },
-        );
-      } catch (error) {
-        toast(error instanceof Error ? error.message : "无法安排任务");
+  const toggleDocumentTasks = useCallback(
+    (tasks: readonly MarkdownTask[]) =>
+      applyTaskChanges(
+        tasks,
+        (markdown, task) =>
+          toggleTask(markdown, task.line, task.content),
+        "无法更新任务",
+      ),
+    [applyTaskChanges],
+  );
+
+  const scheduleDocumentTasks = useCallback(
+    (tasks: readonly MarkdownTask[], date: string | null) =>
+      applyTaskChanges(
+        tasks,
+        (markdown, task) =>
+          rescheduleTask(markdown, task.line, task.content, date),
+        "无法安排任务",
+      ),
+    [applyTaskChanges],
+  );
+
+  const editDocumentTask = useCallback(
+    (task: MarkdownTask, content: string) =>
+      applyTaskChanges(
+        [task],
+        (markdown, current) =>
+          editTask(markdown, current.line, current.content, content),
+        "无法编辑任务",
+      ),
+    [applyTaskChanges],
+  );
+
+  const deleteDocumentTasks = useCallback(
+    (tasks: readonly MarkdownTask[]) =>
+      applyTaskChanges(
+        tasks,
+        (markdown, task) =>
+          removeTask(markdown, task.line, task.content),
+        "无法删除任务",
+      ),
+    [applyTaskChanges],
+  );
+
+  const convertDocumentTasks = useCallback(
+    (tasks: readonly MarkdownTask[]) =>
+      applyTaskChanges(
+        tasks,
+        (markdown, task) =>
+          convertTaskToBullet(markdown, task.line, task.content),
+        "无法转换任务",
+      ),
+    [applyTaskChanges],
+  );
+
+  const addDocumentTask = useCallback(
+    (
+      target: { date?: string; documentId?: string; label: string },
+      content: string,
+    ) => {
+      const documentId =
+        target.documentId ?? (target.date ? `daily-${target.date}` : "");
+      if (!documentId) return;
+      const existing = documents.find(
+        ({ document }) => document.id === documentId,
+      );
+      if (existing) {
+        try {
+          const next = appendTask(existing.document.content, content);
+          mutateNotebooks(
+            (records) =>
+              updateDocument(records, documentId, (document) => ({
+                ...document,
+                content: next,
+                updatedAt: new Date().toISOString(),
+              })),
+            { documentIds: [documentId], structural: false },
+          );
+        } catch (error) {
+          toast(error instanceof Error ? error.message : "无法添加任务");
+        }
+        return;
       }
+      if (!target.date) {
+        toast("任务来源笔记不存在");
+        return;
+      }
+      const now = new Date().toISOString();
+      const taskContent = appendTask(
+        dailyNoteContent(target.date, false),
+        content,
+      );
+      mutateNotebooks((records) =>
+        records.map((candidate) =>
+          candidate.id === notebook.id
+            ? addDocumentToFolder(
+                candidate,
+                `${candidate.id}-daily`,
+                "每日笔记",
+                {
+                  id: documentId,
+                  title: formatDailyTitle(target.date!),
+                  content: taskContent,
+                  createdAt: now,
+                  updatedAt: now,
+                  revision: 0,
+                },
+              )
+            : candidate,
+        ),
+      );
     },
-    [mutateNotebooks, toast],
+    [documents, mutateNotebooks, notebook.id, toast],
   );
 
   const handleTogglePinned = useCallback(
@@ -1069,11 +1398,19 @@ export function ReflectWorkspace() {
     form.remove();
   }, []);
 
+  const notedDailyDates = useMemo(
+    () => dailyDatesFromDocuments(documents.map(({ document }) => document)),
+    [documents],
+  );
+
   const renderEditor = (location: DocumentLocation) => {
     const backlinks = backlinksFor(location, documents);
     const conflict = conflicts[location.document.id];
+    const isDaily = view.kind === "daily";
     return (
-      <div className={`note-layout ${contextOpen ? "" : "context-closed"}`}>
+      <div
+        className={`note-layout ${contextOpen ? "" : "context-closed"} ${isDaily ? "daily-layout" : ""}`}
+      >
         <section className="note-column">
           <header className="workspace-header">
             <div className="header-left">
@@ -1087,7 +1424,7 @@ export function ReflectWorkspace() {
                   <Menu size={18} />
                 </button>
               ) : null}
-              {view.kind === "daily" ? (
+              {isDaily ? (
                 <>
                   <button
                     type="button"
@@ -1216,7 +1553,18 @@ export function ReflectWorkspace() {
           </div>
         </section>
         {contextOpen ? (
-          <aside className="context-sidebar">
+          <aside className={`context-sidebar ${isDaily ? "has-calendar" : ""}`}>
+            {isDaily ? (
+              <DayCalendar
+                key={view.date}
+                selectedDate={view.date}
+                notedDates={notedDailyDates}
+                onSelectDate={(date) => navigate({ kind: "daily", date })}
+                onToday={() =>
+                  navigate({ kind: "daily", date: localDateKey() })
+                }
+              />
+            ) : null}
             <section>
               <h3>笔记信息</h3>
               <dl>
@@ -1337,80 +1685,20 @@ export function ReflectWorkspace() {
     </section>
   );
 
-  const renderTasks = () => {
-    const tasks = tasksIn(documents);
-    const today = localDateKey();
-    const open = tasks.filter((task) => !task.checked);
-    const completed = tasks.filter((task) => task.checked);
-    const groups = [
-      ["已逾期", open.filter((task) => task.dueDate && task.dueDate < today)],
-      ["今天", open.filter((task) => task.dueDate === today)],
-      ["即将到来", open.filter((task) => task.dueDate && task.dueDate > today)],
-      ["未安排", open.filter((task) => !task.dueDate)],
-    ] as const;
-    const taskRows = (group: typeof tasks) =>
-      group.map((task) => (
-        <div className={`task-row ${task.checked ? "completed" : ""}`} key={task.id}>
-          <button
-            type="button"
-            className="task-checkbox"
-            onClick={() =>
-              toggleDocumentTask(task.documentId, task.line, task.content)
-            }
-            aria-label={task.checked ? "标记为未完成" : "标记为已完成"}
-          >
-            {task.checked ? <Check size={13} /> : null}
-          </button>
-          <button
-            type="button"
-            className="task-content"
-            onClick={() => navigate({ kind: "note", documentId: task.documentId })}
-          >
-            {task.breadcrumbs.length > 0 ? (
-              <small className="task-breadcrumbs">{task.breadcrumbs.join(" → ")}</small>
-            ) : null}
-            <strong>{task.content.replace(/\s*\[\[\d{4}-\d{2}-\d{2}\]\]\s*/, " ").trim()}</strong>
-            <small>{task.documentTitle}</small>
-          </button>
-          <input
-            type="date"
-            value={task.dueDate ?? ""}
-            onChange={(event) =>
-              scheduleDocumentTask(
-                task.documentId,
-                task.line,
-                task.content,
-                event.target.value,
-              )
-            }
-            aria-label={`安排任务：${task.content}`}
-          />
-        </div>
-      ));
-    return (
-      <section className="collection-screen tasks-screen">
-        <header className="collection-header">
-          <div>
-            <h1>任务</h1>
-            <p>{open.length} 项待完成</p>
-          </div>
-        </header>
-        {groups.map(([label, group]) => (
-          <section className="task-group" key={label}>
-            <h2>{label}<span>{group.length}</span></h2>
-            {taskRows(group)}
-            {group.length === 0 ? (
-              <p className="empty-copy">暂无任务</p>
-            ) : null}
-          </section>
-        ))}
-        <details className="task-group completed-tasks">
-          <summary>已完成 <span>{completed.length}</span></summary>
-          {taskRows(completed)}
-        </details>
-      </section>
-    );
-  };
+  const renderTasks = () => (
+    <TasksScreen
+      documents={documents}
+      onOpenDocument={(documentId) =>
+        navigate({ kind: "note", documentId })
+      }
+      onToggleTasks={toggleDocumentTasks}
+      onScheduleTasks={scheduleDocumentTasks}
+      onEditTask={editDocumentTask}
+      onDeleteTasks={deleteDocumentTasks}
+      onConvertTasks={convertDocumentTasks}
+      onAddTask={addDocumentTask}
+    />
+  );
 
   const renderTrash = () => {
     const trashed = documents.filter(({ document }) => document.trashed);
@@ -1592,15 +1880,15 @@ export function ReflectWorkspace() {
         <h2>数据</h2>
         <div className="setting-row">
           <div>
-            <strong>新建知识库</strong>
-            <small>创建独立的笔记、模板、Chat 历史和导出范围</small>
+            <strong>新建笔记空间</strong>
+            <small>在当前知识库中创建独立的笔记、模板、Chat 历史和导出范围</small>
           </div>
           <button type="button" onClick={newNotebook}>新建</button>
         </div>
         <div className="setting-row">
           <div>
             <strong>Markdown 导出</strong>
-            <small>将当前知识库导出为保留目录结构的 ZIP</small>
+            <small>将当前笔记空间导出为保留目录结构的 ZIP</small>
           </div>
           <a href={`/api/export?notebookId=${notebook.id}`}>导出</a>
         </div>
@@ -1678,6 +1966,8 @@ export function ReflectWorkspace() {
         <WorkspaceSidebar
           notebook={notebook}
           notebooks={notebooks}
+          knowledgeBaseCatalog={knowledgeBaseCatalog}
+          knowledgeBaseSwitching={knowledgeBaseSwitching}
           documents={documents}
           view={view}
           onNavigate={navigate}
@@ -1696,10 +1986,86 @@ export function ReflectWorkspace() {
             const first = next ? documentsInNotebook(next).find(({ document }) => !document.trashed) : undefined;
             navigate(first ? { kind: "note", documentId: first.document.id } : { kind: "all-notes" });
           }}
+          onKnowledgeBaseChange={(name) => void switchKnowledgeBase(name)}
+          onKnowledgeBaseColorChange={(color) => {
+            void changeKnowledgeBaseColor(color);
+          }}
+          onKnowledgeBaseCreate={() => {
+            if (dirty || saving) {
+              toast("笔记正在保存，请稍后再新建知识库");
+              return;
+            }
+            setKnowledgeBaseName("新知识库");
+            setKnowledgeBaseCreateOpen(true);
+          }}
+          onKnowledgeBaseReveal={() => void revealKnowledgeBase()}
           onAudioMemo={() => setAudioMemoOpen(true)}
         />
       ) : null}
       <div className="workspace-content">{content}</div>
+      {knowledgeBaseCreateOpen ? (
+        <div
+          className="knowledge-base-create-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !knowledgeBaseSwitching
+            ) {
+              setKnowledgeBaseCreateOpen(false);
+            }
+          }}
+        >
+          <form
+            className="knowledge-base-create-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="knowledge-base-create-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createKnowledgeBase(knowledgeBaseName);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !knowledgeBaseSwitching) {
+                setKnowledgeBaseCreateOpen(false);
+              }
+            }}
+          >
+            <h2 id="knowledge-base-create-title">新建知识库</h2>
+            <p>
+              知识库会保存在{" "}
+              <code>{knowledgeBaseCatalog?.directory ?? "~/.mdoc"}</code>
+            </p>
+            <label htmlFor="knowledge-base-create-name">知识库名称</label>
+            <input
+              id="knowledge-base-create-name"
+              autoFocus
+              value={knowledgeBaseName}
+              onChange={(event) => setKnowledgeBaseName(event.target.value)}
+              placeholder="例如：工作资料"
+              maxLength={125}
+              disabled={knowledgeBaseSwitching}
+            />
+            <small>名称会用于识别和切换这个知识库</small>
+            <footer>
+              <button
+                type="button"
+                onClick={() => setKnowledgeBaseCreateOpen(false)}
+                disabled={knowledgeBaseSwitching}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className="primary"
+                disabled={knowledgeBaseSwitching || !knowledgeBaseName.trim()}
+              >
+                {knowledgeBaseSwitching ? "正在创建…" : "创建并切换"}
+              </button>
+            </footer>
+          </form>
+        </div>
+      ) : null}
       {paletteOpen ? (
         <CommandPalette
           notebookId={notebook.id}

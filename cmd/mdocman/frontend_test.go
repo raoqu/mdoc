@@ -36,7 +36,7 @@ func TestFrontendHandlerDoesNotMaskBackendOrMissingFiles(t *testing.T) {
 	handler := newFrontendHandler(fstest.MapFS{
 		"index.html": {Data: []byte("<!doctype html>")},
 	})
-	for _, requestPath := range []string{"/api", "/api/missing", "/uploads/missing.png", "/missing.js", "/.gitignore", "/.vite/manifest.json"} {
+	for _, requestPath := range []string{"/api", "/api/missing", "/_mdoc/themes/default.css", "/uploads/missing.png", "/missing.js", "/.gitignore", "/.vite/manifest.json"} {
 		response := requestFrontend(t, handler, requestPath)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("GET %s = %d, want 404", requestPath, response.Code)

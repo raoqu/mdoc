@@ -57,6 +57,10 @@ export default defineConfig(async () => {
           target: apiTarget,
           changeOrigin: true,
         },
+        "/_mdoc": {
+          target: apiTarget,
+          changeOrigin: true,
+        },
         "/site": {
           target: apiTarget,
           changeOrigin: true,

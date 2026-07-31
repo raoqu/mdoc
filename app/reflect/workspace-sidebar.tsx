@@ -1,12 +1,16 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
+  Check,
   ChevronLeft,
   ChevronRight,
   FilePlus2,
   Files,
+  FolderOpen,
   ListChecks,
+  LocateFixed,
   MessageCircle,
   Mic,
   PanelLeftClose,
@@ -22,9 +26,23 @@ import type {
   WorkspaceView,
 } from "./types";
 
+export interface KnowledgeBaseCatalog {
+  directory: string;
+  active: string;
+  knowledgeBases: {
+    name: string;
+    label: string;
+    color: string;
+    sizeBytes: number;
+    modifiedAt: string;
+  }[];
+}
+
 interface WorkspaceSidebarProps {
   notebook: NotebookRecord;
   notebooks: readonly NotebookRecord[];
+  knowledgeBaseCatalog: KnowledgeBaseCatalog | null;
+  knowledgeBaseSwitching: boolean;
   documents: readonly DocumentLocation[];
   view: WorkspaceView;
   onNavigate: (view: WorkspaceView) => void;
@@ -36,8 +54,23 @@ interface WorkspaceSidebarProps {
   canGoNext: boolean;
   onCollapse: () => void;
   onNotebookChange: (notebookId: string) => void;
+  onKnowledgeBaseChange: (knowledgeBaseName: string) => void;
+  onKnowledgeBaseColorChange: (color: string) => void;
+  onKnowledgeBaseCreate: () => void;
+  onKnowledgeBaseReveal: () => void;
   onAudioMemo: () => void;
 }
+
+const KNOWLEDGE_BASE_COLORS = [
+  { label: "靛蓝", value: "#5b4cf0" },
+  { label: "紫色", value: "#8b5cf6" },
+  { label: "玫红", value: "#d946ef" },
+  { label: "红色", value: "#ef4444" },
+  { label: "橙色", value: "#f97316" },
+  { label: "绿色", value: "#22c55e" },
+  { label: "青色", value: "#14b8a6" },
+  { label: "蓝色", value: "#3b82f6" },
+] as const;
 
 function isView(view: WorkspaceView, kind: WorkspaceView["kind"]): boolean {
   return view.kind === kind;
@@ -46,6 +79,8 @@ function isView(view: WorkspaceView, kind: WorkspaceView["kind"]): boolean {
 export function WorkspaceSidebar({
   notebook,
   notebooks,
+  knowledgeBaseCatalog,
+  knowledgeBaseSwitching,
   documents,
   view,
   onNavigate,
@@ -57,10 +92,44 @@ export function WorkspaceSidebar({
   canGoNext,
   onCollapse,
   onNotebookChange,
+  onKnowledgeBaseChange,
+  onKnowledgeBaseColorChange,
+  onKnowledgeBaseCreate,
+  onKnowledgeBaseReveal,
   onAudioMemo,
 }: WorkspaceSidebarProps) {
+  const [knowledgeBaseMenuOpen, setKnowledgeBaseMenuOpen] = useState(false);
+  const [colorMenuOpen, setColorMenuOpen] = useState(false);
+  const knowledgeBaseMenuRef = useRef<HTMLDivElement>(null);
   const pinned = documents.filter(({ document }) => document.pinned && !document.trashed);
   const tags = allTags(documents).slice(0, 8);
+  const activeKnowledgeBase = knowledgeBaseCatalog?.knowledgeBases.find(
+    (knowledgeBase) => knowledgeBase.name === knowledgeBaseCatalog.active,
+  );
+  const activeKnowledgeBaseLabel = activeKnowledgeBase?.label ?? "我的知识库";
+  const activeKnowledgeBaseColor = activeKnowledgeBase?.color ?? notebook.accent;
+
+  useEffect(() => {
+    if (!knowledgeBaseMenuOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!knowledgeBaseMenuRef.current?.contains(event.target as Node)) {
+        setKnowledgeBaseMenuOpen(false);
+        setColorMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setKnowledgeBaseMenuOpen(false);
+        setColorMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [knowledgeBaseMenuOpen]);
 
   return (
     <aside className="reflect-sidebar">
@@ -73,7 +142,7 @@ export function WorkspaceSidebar({
         >
           <PanelLeftClose size={17} />
         </button>
-        <span />
+        <span className="sidebar-topline-spacer" />
         <button
           type="button"
           onClick={onPrevious}
@@ -201,7 +270,7 @@ export function WorkspaceSidebar({
             className="notebook-switcher"
             value={notebook.id}
             onChange={(event) => onNotebookChange(event.target.value)}
-            aria-label="切换知识库"
+            aria-label="切换笔记空间"
           >
             {notebooks.map((candidate) => (
               <option value={candidate.id} key={candidate.id}>
@@ -210,21 +279,162 @@ export function WorkspaceSidebar({
             ))}
           </select>
         ) : null}
-        <button
-          type="button"
-          className={isView(view, "settings") ? "active" : ""}
-          onClick={() => onNavigate({ kind: "settings" })}
-        >
-          <span
-            className="graph-swatch"
-            style={{ backgroundColor: notebook.accent }}
-          />
-          <span>
-            <strong>{notebook.title}</strong>
-            <small>{documents.filter(({ document }) => !document.trashed).length} 篇笔记</small>
-          </span>
-          <Settings size={16} />
-        </button>
+        <div className="knowledge-base-footer" ref={knowledgeBaseMenuRef}>
+          <button
+            type="button"
+            className="knowledge-base-trigger"
+            onClick={() => {
+              setKnowledgeBaseMenuOpen((open) => !open);
+              setColorMenuOpen(false);
+            }}
+            disabled={!knowledgeBaseCatalog || knowledgeBaseSwitching}
+            title={
+              knowledgeBaseCatalog
+                ? `${activeKnowledgeBaseLabel} · ${knowledgeBaseCatalog.directory}`
+                : "正在读取知识库"
+            }
+            aria-label={`切换知识库：${activeKnowledgeBaseLabel}`}
+            aria-haspopup="menu"
+            aria-expanded={knowledgeBaseMenuOpen}
+          >
+            <span
+              className="graph-swatch"
+              style={{ backgroundColor: activeKnowledgeBaseColor }}
+            />
+            <span>{activeKnowledgeBaseLabel}</span>
+          </button>
+          <button
+            type="button"
+            className={`sidebar-settings-button ${isView(view, "settings") ? "active" : ""}`}
+            aria-label="打开用户设置"
+            title="用户设置"
+            onClick={() => {
+              setKnowledgeBaseMenuOpen(false);
+              setColorMenuOpen(false);
+              onNavigate({ kind: "settings" });
+            }}
+          >
+            <Settings size={17} />
+          </button>
+
+          {knowledgeBaseMenuOpen && knowledgeBaseCatalog ? (
+            <div
+              className="knowledge-base-menu"
+              role="menu"
+              aria-label="切换知识库"
+            >
+              <div className="knowledge-base-list">
+                {knowledgeBaseCatalog.knowledgeBases.map((knowledgeBase) => {
+                  const current =
+                    knowledgeBase.name === knowledgeBaseCatalog.active;
+                  return (
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={current}
+                      key={knowledgeBase.name}
+                      onClick={() => {
+                        setKnowledgeBaseMenuOpen(false);
+                        if (!current) onKnowledgeBaseChange(knowledgeBase.name);
+                      }}
+                    >
+                      <span
+                        className="knowledge-base-menu-swatch"
+                        style={{ backgroundColor: knowledgeBase.color }}
+                      />
+                      <span>{knowledgeBase.label}</span>
+                      {current ? <Check size={15} /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="knowledge-base-menu-separator" />
+
+              <div
+                className="knowledge-base-color-control"
+                onPointerEnter={() => setColorMenuOpen(true)}
+                onPointerLeave={() => setColorMenuOpen(false)}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={colorMenuOpen}
+                  onClick={() => setColorMenuOpen((open) => !open)}
+                >
+                  <span
+                    className="knowledge-base-menu-swatch"
+                    style={{ backgroundColor: activeKnowledgeBaseColor }}
+                  />
+                  <span>知识库颜色</span>
+                  <ChevronRight size={16} />
+                </button>
+                {colorMenuOpen ? (
+                  <div
+                    className="knowledge-base-color-menu"
+                    role="menu"
+                    aria-label="知识库颜色"
+                  >
+                    {KNOWLEDGE_BASE_COLORS.map((color) => (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={color.value === activeKnowledgeBaseColor}
+                        key={color.value}
+                        onClick={() => onKnowledgeBaseColorChange(color.value)}
+                      >
+                        <span
+                          className="knowledge-base-menu-swatch"
+                          style={{ backgroundColor: color.value }}
+                        />
+                        <span>{color.label}</span>
+                        {color.value === activeKnowledgeBaseColor ? (
+                          <Check size={15} />
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setKnowledgeBaseMenuOpen(false);
+                  onKnowledgeBaseReveal();
+                }}
+              >
+                <LocateFixed size={16} />
+                <span>在 Finder 中显示知识库</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setKnowledgeBaseMenuOpen(false);
+                  onKnowledgeBaseCreate();
+                }}
+              >
+                <FolderOpen size={16} />
+                <span>新建知识库…</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={isView(view, "settings") ? "active" : ""}
+                onClick={() => {
+                  setKnowledgeBaseMenuOpen(false);
+                  onNavigate({ kind: "settings" });
+                }}
+              >
+                <Settings size={16} />
+                <span>用户设置</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
     </aside>
   );

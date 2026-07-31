@@ -1,0 +1,17 @@
+/* Warm reading overrides; all unspecified values inherit from default.css. */
+:root {
+  --preview-background: #f5efe3;
+  --preview-surface: #ebe0ce;
+  --preview-surface-strong: #dfd1b9;
+  --preview-text: #4b4033;
+  --preview-muted-text: #746553;
+  --preview-link: #7b5436;
+  --preview-border: #d6c5ab;
+  --preview-accent: #a27752;
+  --preview-inline-code-background: #e9dcc7;
+  --preview-inline-code-text: #7d4938;
+  --preview-code-background: #3f372f;
+  --preview-code-text: #f4eadb;
+  --preview-body-line-height: 2;
+  --preview-quote-line-height: 1.9;
+}

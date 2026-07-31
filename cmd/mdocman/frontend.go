@@ -78,7 +78,7 @@ func (h *frontendHandler) serveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func isBackendPath(requestPath string) bool {
-	for _, prefix := range []string{"/api", "/uploads", "/audio", "/site", "/s"} {
+	for _, prefix := range []string{"/api", "/_mdoc", "/uploads", "/audio", "/site", "/s"} {
 		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
 			return true
 		}

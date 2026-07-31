@@ -1,0 +1,16 @@
+/* Compact cross-platform CJK sans-serif typography overrides. */
+:root {
+  --preview-cjk-sans-font: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", Arial, sans-serif;
+  --preview-body-font: var(--preview-cjk-sans-font);
+  --preview-body-font-size: 14px;
+  --preview-body-line-height: 16px;
+  --preview-heading-font: var(--preview-cjk-sans-font);
+  --preview-table-font: var(--preview-cjk-sans-font);
+  --preview-table-font-size: 12px;
+  --preview-table-line-height: 14px;
+  --preview-code-font-size: 12px;
+  --preview-code-line-height: 14px;
+  --preview-quote-font: var(--preview-cjk-sans-font);
+  --preview-quote-font-size: 12px;
+  --preview-quote-line-height: 14px;
+}

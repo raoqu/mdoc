@@ -39,10 +39,12 @@ test("server-renders the Reflect workspace shell", async () => {
 });
 
 test("ships the migrated editor and graph capabilities", async () => {
-  const [workspace, editor, markdown, packageJson] = await Promise.all([
+  const [workspace, sidebar, editor, markdown, tasks, packageJson] = await Promise.all([
     readFile(new URL("../app/reflect/workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/reflect/workspace-sidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/reflect/reflect-editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/reflect/markdown.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/reflect/tasks-screen.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -53,9 +55,18 @@ test("ships the migrated editor and graph capabilities", async () => {
   assert.match(editor, /onSlashMenuSearch/);
   assert.match(editor, /onFilePaste/);
   assert.match(workspace, /kind: "daily"/);
+  assert.match(workspace, /isEmptyDailyNoteDraft/);
+  assert.doesNotMatch(workspace, /ensureDaily/);
   assert.match(workspace, /backlinksFor/);
-  assert.match(workspace, /tasksIn/);
+  assert.match(workspace, /<TasksScreen/);
+  assert.match(tasks, /tasksIn/);
+  assert.match(tasks, /任务筛选/);
   assert.match(workspace, /CommandPalette/);
   assert.match(markdown, /WIKI_LINK_PATTERN/);
   assert.match(markdown, /TASK_PATTERN/);
+  assert.match(sidebar, /className="knowledge-base-footer"/);
+  assert.match(sidebar, /知识库颜色/);
+  assert.match(sidebar, /在 Finder 中显示知识库/);
+  assert.match(sidebar, /新建知识库…/);
+  assert.doesNotMatch(sidebar, /数据库|SQLite|database-switcher/);
 });
