@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Download, ExternalLink, KeyRound, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Check, Download, ExternalLink, KeyRound, ListFilter, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { AI_PROVIDER_CATALOG, type AiProviderConfig, type AiProviderId } from "./ai";
 
 interface AiSettingsProps {
+  section: "models" | "ai-chat";
   providers: readonly AiProviderConfig[];
   chatSystemPrompt: string;
   semanticSearchEnabled: boolean;
@@ -40,6 +41,133 @@ interface SemanticStatus {
   };
 }
 
+interface RemoteModelOption {
+  id: string;
+  label: string;
+}
+
+interface ModelPickerProps {
+  providerLabel: string;
+  models: readonly RemoteModelOption[];
+  selected: string;
+  loading: boolean;
+  error: string;
+  onSelect: (model: string) => void;
+  onRetry: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+function ModelPicker({
+  providerLabel,
+  models,
+  selected,
+  loading,
+  error,
+  onSelect,
+  onRetry,
+  onCancel,
+  onConfirm,
+}: ModelPickerProps) {
+  const [query, setQuery] = useState("");
+  const filteredModels = useMemo(() => {
+    const folded = query.trim().toLocaleLowerCase();
+    if (!folded) return models;
+    return models.filter((candidate) =>
+      `${candidate.id} ${candidate.label}`.toLocaleLowerCase().includes(folded),
+    );
+  }, [models, query]);
+
+  return (
+    <div
+      className="model-picker-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div
+        className="model-picker-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="model-picker-title"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onCancel();
+        }}
+      >
+        <header>
+          <span>
+            <strong id="model-picker-title">选择 {providerLabel} 模型</strong>
+            <small>已选中 {selected ? 1 : 0} 个</small>
+          </span>
+          <button type="button" onClick={onCancel} aria-label="关闭模型选择器">
+            <X size={17} />
+          </button>
+        </header>
+        <label className="model-picker-search">
+          <Search size={16} />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && selected) {
+                event.preventDefault();
+                onConfirm();
+              }
+            }}
+            placeholder="搜索模型 ID 或名称"
+            aria-label="搜索模型"
+          />
+        </label>
+        <div className="model-picker-results" role="listbox" aria-label={`${providerLabel} 模型`}>
+          {loading ? (
+            <div className="model-picker-message">
+              <RefreshCw className="spin" size={18} />
+              正在从供应商获取模型列表…
+            </div>
+          ) : error ? (
+            <div className="model-picker-message model-picker-error">
+              <span>{error}</span>
+              <button type="button" onClick={onRetry}>重试</button>
+            </div>
+          ) : filteredModels.length ? (
+            filteredModels.map((candidate) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected === candidate.id}
+                className={selected === candidate.id ? "selected" : ""}
+                key={candidate.id}
+                onClick={() => onSelect(candidate.id)}
+              >
+                <span className="model-picker-choice" aria-hidden="true">
+                  {selected === candidate.id ? <Check size={12} /> : null}
+                </span>
+                <span>
+                  <strong>{candidate.id}</strong>
+                  {candidate.label !== candidate.id ? <small>{candidate.label}</small> : null}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="model-picker-message">
+              {models.length ? "没有匹配的模型" : "供应商没有返回可用于对话的模型"}
+            </div>
+          )}
+        </div>
+        <footer>
+          <small>单击一行进行单选，也可以关闭后手动填写模型 ID。</small>
+          <button type="button" onClick={onCancel}>取消</button>
+          <button type="button" className="primary" disabled={!selected || loading} onClick={onConfirm}>
+            确认
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 const formatBytes = (bytes: number) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -48,6 +176,7 @@ const formatBytes = (bytes: number) => {
 };
 
 export function AiSettings({
+  section,
   providers,
   chatSystemPrompt,
   semanticSearchEnabled,
@@ -67,10 +196,19 @@ export function AiSettings({
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [adding, setAdding] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelOptions, setModelOptions] = useState<RemoteModelOption[]>([]);
+  const [modelSelection, setModelSelection] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
   const [semanticStatus, setSemanticStatus] = useState<SemanticStatus | null>(null);
   const [semanticModelSource, setSemanticModelSource] = useState("auto");
+  const [semanticConnectionError, setSemanticConnectionError] = useState("");
+  const [semanticRefreshAttempt, setSemanticRefreshAttempt] = useState(0);
 
   useEffect(() => {
+    if (section !== "ai-chat") return;
+
     let active = true;
     let timer = 0;
     const refresh = async () => {
@@ -79,6 +217,7 @@ export function AiSettings({
         if (!response.ok) throw new Error(await response.text());
         const next = (await response.json()) as SemanticStatus;
         if (!active) return;
+        setSemanticConnectionError("");
         setSemanticStatus(next);
         if (
           next.status === "downloading" ||
@@ -91,21 +230,10 @@ export function AiSettings({
         }
       } catch {
         if (active) {
-          setSemanticStatus({
-            enabled: false,
-            available: false,
-            status: "unavailable",
-            indexed: 0,
-            total: 0,
-            message: "无法连接本地语义索引服务。",
-            modelDownload: {
-              status: "failed",
-              downloaded: 0,
-              total: 0,
-              target: "~/.mdoc/models",
-              sources: [],
-            },
-          });
+          setSemanticConnectionError(
+            "无法连接本地语义索引服务。请确认本地 Go 服务仍在运行。",
+          );
+          timer = window.setTimeout(() => void refresh(), 1500);
         }
       }
     };
@@ -114,15 +242,22 @@ export function AiSettings({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [semanticSearchEnabled]);
+  }, [section, semanticRefreshAttempt, semanticSearchEnabled]);
 
   const rebuildSemanticIndex = async () => {
     try {
       const response = await fetch("/api/semantic", { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
+      setSemanticConnectionError("");
       setSemanticStatus((await response.json()) as SemanticStatus);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "无法重建语义索引");
+      onNotice(
+        error instanceof TypeError
+          ? "无法连接本地语义索引服务，请确认本地 Go 服务仍在运行"
+          : error instanceof Error
+            ? error.message
+            : "无法重建语义索引",
+      );
     }
   };
 
@@ -134,11 +269,18 @@ export function AiSettings({
         body: JSON.stringify({ source: semanticModelSource, enable: true }),
       });
       if (!response.ok) throw new Error(await response.text());
+      setSemanticConnectionError("");
       setSemanticStatus((await response.json()) as SemanticStatus);
       onSemanticSearchChange(true);
       onNotice("模型下载已开始；完成后会自动建立语义索引");
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "无法下载语义模型");
+      onNotice(
+        error instanceof TypeError
+          ? "无法连接本地语义索引服务，请确认本地 Go 服务仍在运行"
+          : error instanceof Error
+            ? error.message
+            : "无法下载语义模型",
+      );
     }
   };
 
@@ -146,6 +288,39 @@ export function AiSettings({
     setProvider(next);
     const nextInfo = AI_PROVIDER_CATALOG.find((candidate) => candidate.id === next)!;
     setModel(nextInfo.models[0].id);
+    setModelPickerOpen(false);
+    setModelOptions([]);
+    setModelSelection("");
+    setModelsError("");
+  };
+
+  const loadModels = async () => {
+    if (!apiKey.trim()) {
+      onNotice("请先填写 API 密钥，再获取模型列表");
+      return;
+    }
+    setModelPickerOpen(true);
+    setModelsLoading(true);
+    setModelsError("");
+    try {
+      const response = await fetch("/api/ai/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, apiKey, baseUrl }),
+      });
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const payload = (await response.json()) as { models: RemoteModelOption[] };
+      setModelOptions(payload.models);
+      setModelSelection(
+        payload.models.some((candidate) => candidate.id === model) ? model : "",
+      );
+    } catch (error) {
+      setModelOptions([]);
+      setModelSelection("");
+      setModelsError(error instanceof Error ? error.message : "无法获取模型列表");
+    } finally {
+      setModelsLoading(false);
+    }
   };
 
   const add = async () => {
@@ -192,45 +367,60 @@ export function AiSettings({
 
   return (
     <section className="ai-settings-section">
-      <h2>AI 供应商</h2>
-      <p className="settings-section-copy">直接使用你自己的 API 密钥。密钥进入操作系统钥匙串，不写入浏览器、知识库或 Markdown。</p>
-      <div className="provider-list">
-        {providers.map((item) => (
-          <div className="provider-row" key={item.id}>
-            <KeyRound size={17} />
-            <span><strong>{item.label}</strong><small>{item.model} · {item.keyHint}</small></span>
-            {item.isDefault ? <em><Check size={13} /> 默认</em> : <button type="button" onClick={() => void makeDefault(item.id)}>设为默认</button>}
-            <button type="button" className="icon-danger" onClick={() => void remove(item.id)} aria-label="移除供应商"><Trash2 size={15} /></button>
+      {section === "models" ? (
+        <>
+          <h2>供应商与模型</h2>
+          <p className="settings-section-copy">直接使用你自己的 API 密钥。密钥进入操作系统钥匙串，不写入浏览器、知识库或 Markdown。</p>
+          <div className="provider-list">
+            {providers.map((item) => (
+              <div className="provider-row" key={item.id}>
+                <KeyRound size={17} />
+                <span><strong>{item.label}</strong><small>{item.model} · {item.keyHint}</small></span>
+                {item.isDefault ? <em><Check size={13} /> 默认</em> : <button type="button" onClick={() => void makeDefault(item.id)}>设为默认</button>}
+                <button type="button" className="icon-danger" onClick={() => void remove(item.id)} aria-label="移除供应商"><Trash2 size={15} /></button>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="provider-form">
-        <select value={provider} onChange={(event) => changeProvider(event.target.value as AiProviderId)} aria-label="供应商">
-          {AI_PROVIDER_CATALOG.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.label}</option>)}
-        </select>
-        <input
-          value={model}
-          onChange={(event) => setModel(event.target.value)}
-          list={`ai-models-${provider}`}
-          placeholder="模型 ID"
-          aria-label="模型"
-        />
-        <datalist id={`ai-models-${provider}`}>
-          {info.models.map((candidate) => (
-            <option value={candidate.id} key={candidate.id}>
-              {candidate.label}
-            </option>
-          ))}
-        </datalist>
-        <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={info.keyPlaceholder} aria-label="API 密钥" autoComplete="off" />
-        <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="自定义 Base URL（可选）" aria-label="自定义 Base URL" />
-        <button type="button" className="primary-action" onClick={() => void add()} disabled={!apiKey.trim() || adding}><Plus size={15} /> {adding ? "保存中…" : "添加"}</button>
-      </div>
-      <h2>AI Chat</h2>
-      <p className="settings-section-copy">
-        下面的附加指令会随每次对话发送；笔记检索、精确引用和隐私规则始终优先。
-      </p>
-      <div className="setting-row semantic-setting-row">
+          <div className="provider-form">
+            <select value={provider} onChange={(event) => changeProvider(event.target.value as AiProviderId)} aria-label="供应商">
+              {AI_PROVIDER_CATALOG.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.label}</option>)}
+            </select>
+            <div className="provider-model-field">
+              <input
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                list={`ai-models-${provider}`}
+                placeholder="模型 ID"
+                aria-label="模型"
+              />
+              <button
+                type="button"
+                onClick={() => void loadModels()}
+                disabled={!apiKey.trim()}
+                title={apiKey.trim() ? `从 ${info.label} 获取模型列表` : "请先填写 API 密钥"}
+              >
+                <ListFilter size={14} /> 获取模型
+              </button>
+            </div>
+            <datalist id={`ai-models-${provider}`}>
+              {info.models.map((candidate) => (
+                <option value={candidate.id} key={candidate.id}>
+                  {candidate.label}
+                </option>
+              ))}
+            </datalist>
+            <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={info.keyPlaceholder} aria-label="API 密钥" autoComplete="off" />
+            <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="自定义 Base URL（可选）" aria-label="自定义 Base URL" />
+            <button type="button" className="primary-action" onClick={() => void add()} disabled={!apiKey.trim() || adding}><Plus size={15} /> {adding ? "保存中…" : "添加"}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <h2>对话与检索</h2>
+          <p className="settings-section-copy">
+            下面的附加指令会随每次对话发送；笔记检索、精确引用和隐私规则始终优先。
+          </p>
+          <div className="setting-row semantic-setting-row">
         <span>
           <strong>本地语义搜索</strong>
           <small>
@@ -249,7 +439,9 @@ export function AiSettings({
               ))}
             </small>
           ) : null}
-          {semanticStatus?.status === "downloading" ? (
+          {semanticConnectionError ? (
+            <small className="semantic-error">{semanticConnectionError}</small>
+          ) : semanticStatus?.status === "downloading" ? (
             <span className="semantic-progress">
               <progress
                 max={Math.max(semanticStatus.modelDownload.total, 1)}
@@ -290,7 +482,18 @@ export function AiSettings({
           ) : null}
         </span>
         <div className="semantic-setting-actions">
-          {semanticStatus?.status === "downloading" ? (
+          {semanticConnectionError ? (
+            <button
+              type="button"
+              onClick={() => setSemanticRefreshAttempt((attempt) => attempt + 1)}
+            >
+              <RefreshCw size={13} /> 重试连接
+            </button>
+          ) : !semanticStatus ? (
+            <button type="button" disabled>
+              <RefreshCw size={13} /> 正在连接…
+            </button>
+          ) : semanticStatus.status === "downloading" ? (
             <button type="button" disabled>
               <Download size={13} /> 下载中…
             </button>
@@ -335,19 +538,37 @@ export function AiSettings({
             </button>
           )}
         </div>
-      </div>
-      <textarea
-        value={chatSystemPrompt}
-        onChange={(event) =>
-          onChatSystemPromptChange(
-            event.target.value.slice(0, CHAT_SYSTEM_PROMPT_MAX_LENGTH),
-          )
-        }
-        maxLength={CHAT_SYSTEM_PROMPT_MAX_LENGTH}
-        rows={6}
-        placeholder="回答简洁一些；质疑我的假设，并在信息不足时明确指出。"
-        aria-label="Chat 系统提示词"
-      />
+          </div>
+          <textarea
+            value={chatSystemPrompt}
+            onChange={(event) =>
+              onChatSystemPromptChange(
+                event.target.value.slice(0, CHAT_SYSTEM_PROMPT_MAX_LENGTH),
+              )
+            }
+            maxLength={CHAT_SYSTEM_PROMPT_MAX_LENGTH}
+            rows={6}
+            placeholder="回答简洁一些；质疑我的假设，并在信息不足时明确指出。"
+            aria-label="Chat 系统提示词"
+          />
+        </>
+      )}
+      {section === "models" && modelPickerOpen ? (
+        <ModelPicker
+          providerLabel={info.label}
+          models={modelOptions}
+          selected={modelSelection}
+          loading={modelsLoading}
+          error={modelsError}
+          onSelect={setModelSelection}
+          onRetry={() => void loadModels()}
+          onCancel={() => setModelPickerOpen(false)}
+          onConfirm={() => {
+            setModel(modelSelection);
+            setModelPickerOpen(false);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

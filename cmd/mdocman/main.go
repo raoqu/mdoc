@@ -1091,6 +1091,7 @@ func main() {
 	http.HandleFunc("/api/search", cors(s.search))
 	http.HandleFunc("/api/ai/providers", cors(s.aiProviders))
 	http.HandleFunc("/api/ai/providers/", cors(s.aiProvider))
+	http.HandleFunc("/api/ai/models", cors(s.aiModels))
 	http.HandleFunc("/api/ai/transform", cors(s.aiTransform))
 	http.HandleFunc("/api/ai/chat", cors(s.aiChat))
 	http.HandleFunc("/api/ai/conversations", cors(s.aiConversations))

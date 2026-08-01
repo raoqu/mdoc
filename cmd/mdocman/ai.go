@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,11 @@ type aiProviderConfig struct {
 	BaseURL   string `json:"baseUrl,omitempty"`
 	IsDefault bool   `json:"isDefault"`
 	CreatedAt string `json:"createdAt"`
+}
+
+type aiModelOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 type aiMessage struct {
@@ -174,6 +180,154 @@ func (s *server) aiProviders(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", 405)
 	}
+}
+
+func (s *server) aiModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		Provider string `json:"provider"`
+		APIKey   string `json:"apiKey"`
+		BaseURL  string `json:"baseUrl"`
+	}
+	if json.NewDecoder(r.Body).Decode(&input) != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	input.Provider = strings.TrimSpace(input.Provider)
+	input.APIKey = strings.TrimSpace(input.APIKey)
+	input.BaseURL = strings.TrimSpace(input.BaseURL)
+	if !supportedAIProvider(input.Provider) || input.APIKey == "" {
+		http.Error(w, "provider and API key are required", http.StatusBadRequest)
+		return
+	}
+	if input.BaseURL != "" {
+		parsed, err := url.ParseRequestURI(input.BaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			http.Error(w, "base URL must be an http(s) URL", http.StatusBadRequest)
+			return
+		}
+	}
+	models, err := fetchAIModels(r.Context(), input.Provider, input.APIKey, input.BaseURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	jsonOut(w, map[string]any{"models": models})
+}
+
+func fetchAIModels(ctx context.Context, provider, apiKey, baseURL string) ([]aiModelOption, error) {
+	base := strings.TrimRight(baseURL, "/")
+	endpoint := ""
+	switch provider {
+	case "openai":
+		if base == "" {
+			base = "https://api.openai.com/v1"
+		}
+		endpoint = base + "/models"
+	case "openrouter":
+		if base == "" {
+			base = "https://openrouter.ai/api/v1"
+		}
+		endpoint = base + "/models"
+	case "anthropic":
+		if base == "" {
+			base = "https://api.anthropic.com"
+		}
+		endpoint = base + "/v1/models?limit=1000"
+	case "google":
+		if base == "" {
+			base = "https://generativelanguage.googleapis.com/v1beta"
+		}
+		endpoint = base + "/models?pageSize=1000&key=" + url.QueryEscape(apiKey)
+	default:
+		return nil, errors.New("unsupported AI provider")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if provider == "openai" || provider == "openrouter" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	} else if provider == "anthropic" {
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
+	response, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("could not fetch model list: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		failure, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
+		message := strings.TrimSpace(string(failure))
+		if message == "" {
+			message = response.Status
+		}
+		return nil, fmt.Errorf("model API returned %d: %s", response.StatusCode, message)
+	}
+
+	models := []aiModelOption{}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 16<<20))
+	if provider == "google" {
+		var payload struct {
+			Models []struct {
+				Name                       string   `json:"name"`
+				DisplayName                string   `json:"displayName"`
+				SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+			} `json:"models"`
+		}
+		if err = decoder.Decode(&payload); err != nil {
+			return nil, fmt.Errorf("could not decode model list: %w", err)
+		}
+		for _, item := range payload.Models {
+			if !containsString(item.SupportedGenerationMethods, "generateContent") {
+				continue
+			}
+			id := strings.TrimPrefix(strings.TrimSpace(item.Name), "models/")
+			models = append(models, aiModelOption{ID: id, Label: strings.TrimSpace(item.DisplayName)})
+		}
+	} else {
+		var payload struct {
+			Data []struct {
+				ID          string `json:"id"`
+				Name        string `json:"name"`
+				DisplayName string `json:"display_name"`
+			} `json:"data"`
+		}
+		if err = decoder.Decode(&payload); err != nil {
+			return nil, fmt.Errorf("could not decode model list: %w", err)
+		}
+		for _, item := range payload.Data {
+			label := strings.TrimSpace(item.DisplayName)
+			if label == "" {
+				label = strings.TrimSpace(item.Name)
+			}
+			models = append(models, aiModelOption{ID: strings.TrimSpace(item.ID), Label: label})
+		}
+	}
+
+	unique := make(map[string]aiModelOption, len(models))
+	for _, model := range models {
+		if model.ID == "" {
+			continue
+		}
+		if model.Label == "" {
+			model.Label = model.ID
+		}
+		unique[model.ID] = model
+	}
+	models = models[:0]
+	for _, model := range unique {
+		models = append(models, model)
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
+	})
+	return models, nil
 }
 
 func (s *server) aiProvider(w http.ResponseWriter, r *http.Request) {

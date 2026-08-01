@@ -33,6 +33,16 @@ export interface DocumentLocation {
   notebook: NotebookRecord;
 }
 
+export type SettingsSection =
+  | "general"
+  | "models"
+  | "ai-chat"
+  | "assets"
+  | "templates"
+  | "capture"
+  | "sync"
+  | "data";
+
 export type WorkspaceView =
   | { kind: "daily"; date: string }
   | { kind: "note"; documentId: string }
@@ -41,7 +51,7 @@ export type WorkspaceView =
   | { kind: "trash" }
   | { kind: "tag"; tag: string }
   | { kind: "chat"; conversationId?: string }
-  | { kind: "settings" };
+  | { kind: "settings"; section?: SettingsSection };
 
 export type MarkdownSyntaxMode = "hide" | "focus" | "show";
 

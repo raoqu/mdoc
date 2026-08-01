@@ -11,18 +11,27 @@ import {
 } from "react";
 import {
   Archive,
+  Bot,
   ChevronLeft,
   ChevronRight,
+  Database,
   Eye,
   FilePlus2,
+  Image,
+  LayoutTemplate,
   Menu,
+  MessageCircleMore,
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Pin,
   PinOff,
+  Plug,
+  Settings2,
   Shield,
   Trash2,
+  Waypoints,
+  type LucideIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { AiSettings } from "./ai-settings";
@@ -72,6 +81,7 @@ import {
   type DocumentRecord,
   type FolderRecord,
   type NotebookRecord,
+  type SettingsSection,
   type WorkspaceSettings,
   type WorkspaceView,
 } from "./types";
@@ -122,6 +132,83 @@ const WELCOME_NOTEBOOK: NotebookRecord = {
       ],
     },
   ],
+};
+
+const SETTINGS_NAV_GROUPS: readonly {
+  label: string;
+  items: readonly {
+    id: SettingsSection;
+    label: string;
+    icon: LucideIcon;
+  }[];
+}[] = [
+  {
+    label: "偏好设置",
+    items: [{ id: "general", label: "通用", icon: Settings2 }],
+  },
+  {
+    label: "AI",
+    items: [
+      { id: "models", label: "模型", icon: Bot },
+      { id: "ai-chat", label: "AI Chat", icon: MessageCircleMore },
+      { id: "assets", label: "资源描述", icon: Image },
+    ],
+  },
+  {
+    label: "工作空间",
+    items: [
+      { id: "templates", label: "模板", icon: LayoutTemplate },
+      { id: "capture", label: "网页剪藏", icon: Plug },
+      { id: "sync", label: "同步", icon: Waypoints },
+      { id: "data", label: "数据", icon: Database },
+    ],
+  },
+];
+
+const SETTINGS_PAGE_COPY: Record<
+  SettingsSection,
+  { group: string; title: string; description: string }
+> = {
+  general: {
+    group: "偏好设置",
+    title: "通用",
+    description: "调整墨笺的编辑、阅读、外观和快捷键。",
+  },
+  models: {
+    group: "AI",
+    title: "模型",
+    description: "连接 AI 供应商，并管理可用于对话和内容处理的模型。",
+  },
+  "ai-chat": {
+    group: "AI",
+    title: "AI Chat",
+    description: "配置对话指令、本地语义检索和知识库引用能力。",
+  },
+  assets: {
+    group: "AI",
+    title: "资源描述",
+    description: "控制图片、SVG 和 PDF 的 AI 描述与批量处理。",
+  },
+  templates: {
+    group: "工作空间",
+    title: "模板",
+    description: "管理当前笔记空间可插入的 Markdown 模板。",
+  },
+  capture: {
+    group: "工作空间",
+    title: "网页剪藏",
+    description: "连接浏览器扩展，将链接、选区和截图发送到墨笺。",
+  },
+  sync: {
+    group: "工作空间",
+    title: "同步",
+    description: "配置知识库的 Git 备份、自动同步和冲突处理。",
+  },
+  data: {
+    group: "工作空间",
+    title: "数据",
+    description: "管理笔记空间，并导出当前空间中的 Markdown 数据。",
+  },
 };
 
 function ensureFolder(
@@ -677,16 +764,37 @@ export function ReflectWorkspace() {
 
   useEffect(() => {
     if (!loaded) return;
-    const controller = new AbortController();
-    void fetch("/api/semantic", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({ enabled: settings.semanticSearchEnabled }),
-    }).catch(() => {
-      // The local backend may be restarting while the browser keeps its state.
-    });
-    return () => controller.abort();
+    let active = true;
+    let controller: AbortController | null = null;
+    let retryTimer = 0;
+    const syncSemanticSetting = async () => {
+      const requestController = new AbortController();
+      controller = requestController;
+      try {
+        const response = await fetch("/api/semantic", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          signal: requestController.signal,
+          body: JSON.stringify({ enabled: settings.semanticSearchEnabled }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+      } catch {
+        // A development backend can restart while the browser and its local
+        // preference stay alive. Keep reconciling until the service returns.
+        if (active && !requestController.signal.aborted) {
+          retryTimer = window.setTimeout(
+            () => void syncSemanticSetting(),
+            1500,
+          );
+        }
+      }
+    };
+    void syncSemanticSetting();
+    return () => {
+      active = false;
+      window.clearTimeout(retryTimer);
+      controller?.abort();
+    };
   }, [loaded, settings.semanticSearchEnabled]);
 
   const mutateNotebooks = useCallback(
@@ -1643,7 +1751,7 @@ export function ReflectWorkspace() {
               }
               onTag={(tag) => navigate({ kind: "tag", tag })}
               onNotice={toast}
-              onConfigureAI={() => navigate({ kind: "settings" })}
+              onConfigureAI={() => navigate({ kind: "settings", section: "models" })}
             />
           </div>
         </section>
@@ -1866,164 +1974,229 @@ export function ReflectWorkspace() {
     );
   };
 
-  const renderSettings = () => (
-    <section className="settings-screen">
-      <header>
-        <h1>设置</h1>
-        <p>调整墨笺的编辑和阅读体验。</p>
-      </header>
-      <section>
-        <h2>编辑器</h2>
-        <SettingSelect
-          label="Markdown 语法"
-          description="控制未编辑语法标记的显示方式"
-          value={settings.syntaxMode}
-          options={[
-            ["hide", "隐藏"],
-            ["focus", "聚焦时显示"],
-            ["show", "始终显示"],
-          ]}
-          onChange={(syntaxMode) =>
-            setSettings((current) => ({ ...current, syntaxMode }))
-          }
-        />
-        <SettingSelect
-          label="文字大小"
-          description="调整编辑器正文的阅读字号"
-          value={settings.textSize}
-          options={[
-            ["small", "小"],
-            ["medium", "中"],
-            ["large", "大"],
-          ]}
-          onChange={(textSize) =>
-            setSettings((current) => ({ ...current, textSize }))
-          }
-        />
-        <SettingSelect
-          label="内容宽度"
-          description="选择专注阅读宽度或宽屏编辑"
-          value={settings.editorWidth}
-          options={[
-            ["reading", "阅读宽度"],
-            ["wide", "宽屏"],
-          ]}
-          onChange={(editorWidth) =>
-            setSettings((current) => ({ ...current, editorWidth }))
-          }
-        />
-        <SettingToggle
-          label="拼写检查"
-          description="使用浏览器拼写检查标记可能的错误"
-          checked={settings.spellCheck}
-          onChange={(spellCheck) =>
-            setSettings((current) => ({ ...current, spellCheck }))
-          }
-        />
-        <SettingToggle
-          label="标题后自动开始列表"
-          description="在标题末尾回车时开始项目符号"
-          checked={settings.startWithBullet}
-          onChange={(startWithBullet) =>
-            setSettings((current) => ({ ...current, startWithBullet }))
-          }
-        />
-      </section>
-      <section>
-        <h2>外观</h2>
-        <SettingSelect
-          label="主题"
-          description="选择浅色、深色或跟随系统"
-          value={settings.theme}
-          options={[
-            ["system", "跟随系统"],
-            ["light", "浅色"],
-            ["dark", "深色"],
-          ]}
-          onChange={(theme) =>
-            setSettings((current) => ({ ...current, theme }))
-          }
-        />
-      </section>
-      <section>
-        <h2>快捷键</h2>
-        <div className="shortcut-grid">
-          <span>搜索与命令 <kbd>⌘ K</kbd></span>
-          <span>新建笔记 <kbd>⌘ N</kbd></span>
-          <span>今日笔记 <kbd>⌘ D</kbd></span>
-          <span>任务 <kbd>⌘ T</kbd></span>
-          <span>AI Chat <kbd>⌘ J</kbd></span>
-          <span>选区 AI <kbd>⌘ ⇧ J</kbd></span>
-          <span>独立窗口 <kbd>⌘ ⇧ O</kbd></span>
-          <span>显示/隐藏侧栏 <kbd>⌘ \\</kbd></span>
-          <span>移动块 <kbd>⌥ ↑ / ↓</kbd></span>
-          <span>打开光标下链接 <kbd>⌘ ↵</kbd></span>
+  const renderSettings = (activeSection: SettingsSection) => {
+    const pageCopy = SETTINGS_PAGE_COPY[activeSection];
+
+    return (
+      <section className="settings-screen">
+        <aside className="settings-navigation">
+          <header>
+            <h1>设置</h1>
+            <p>配置墨笺与当前工作空间</p>
+          </header>
+          <nav aria-label="设置分类">
+            {SETTINGS_NAV_GROUPS.map((group) => (
+              <section key={group.label}>
+                <h2>{group.label}</h2>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeSection === item.id;
+                  return (
+                    <button
+                      type="button"
+                      className={active ? "active" : ""}
+                      aria-current={active ? "page" : undefined}
+                      key={item.id}
+                      onClick={() => {
+                        if (!active) {
+                          navigate({ kind: "settings", section: item.id });
+                        }
+                      }}
+                    >
+                      <Icon size={16} />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </section>
+            ))}
+          </nav>
+        </aside>
+
+        <div className="settings-configuration">
+          <header className="settings-configuration-header">
+            <span>设置 / {pageCopy.group}</span>
+            <h1>{pageCopy.title}</h1>
+            <p>{pageCopy.description}</p>
+          </header>
+
+          {activeSection === "general" ? (
+            <>
+              <section>
+                <h2>编辑器</h2>
+                <SettingSelect
+                  label="Markdown 语法"
+                  description="控制未编辑语法标记的显示方式"
+                  value={settings.syntaxMode}
+                  options={[
+                    ["hide", "隐藏"],
+                    ["focus", "聚焦时显示"],
+                    ["show", "始终显示"],
+                  ]}
+                  onChange={(syntaxMode) =>
+                    setSettings((current) => ({ ...current, syntaxMode }))
+                  }
+                />
+                <SettingSelect
+                  label="文字大小"
+                  description="调整编辑器正文的阅读字号"
+                  value={settings.textSize}
+                  options={[
+                    ["small", "小"],
+                    ["medium", "中"],
+                    ["large", "大"],
+                  ]}
+                  onChange={(textSize) =>
+                    setSettings((current) => ({ ...current, textSize }))
+                  }
+                />
+                <SettingSelect
+                  label="内容宽度"
+                  description="选择专注阅读宽度或宽屏编辑"
+                  value={settings.editorWidth}
+                  options={[
+                    ["reading", "阅读宽度"],
+                    ["wide", "宽屏"],
+                  ]}
+                  onChange={(editorWidth) =>
+                    setSettings((current) => ({ ...current, editorWidth }))
+                  }
+                />
+                <SettingToggle
+                  label="拼写检查"
+                  description="使用浏览器拼写检查标记可能的错误"
+                  checked={settings.spellCheck}
+                  onChange={(spellCheck) =>
+                    setSettings((current) => ({ ...current, spellCheck }))
+                  }
+                />
+                <SettingToggle
+                  label="标题后自动开始列表"
+                  description="在标题末尾回车时开始项目符号"
+                  checked={settings.startWithBullet}
+                  onChange={(startWithBullet) =>
+                    setSettings((current) => ({ ...current, startWithBullet }))
+                  }
+                />
+              </section>
+              <section>
+                <h2>外观</h2>
+                <SettingSelect
+                  label="主题"
+                  description="选择浅色、深色或跟随系统"
+                  value={settings.theme}
+                  options={[
+                    ["system", "跟随系统"],
+                    ["light", "浅色"],
+                    ["dark", "深色"],
+                  ]}
+                  onChange={(theme) =>
+                    setSettings((current) => ({ ...current, theme }))
+                  }
+                />
+              </section>
+              <section>
+                <h2>快捷键</h2>
+                <div className="shortcut-grid">
+                  <span>搜索与命令 <kbd>⌘ K</kbd></span>
+                  <span>新建笔记 <kbd>⌘ N</kbd></span>
+                  <span>今日笔记 <kbd>⌘ D</kbd></span>
+                  <span>任务 <kbd>⌘ T</kbd></span>
+                  <span>AI Chat <kbd>⌘ J</kbd></span>
+                  <span>选区 AI <kbd>⌘ ⇧ J</kbd></span>
+                  <span>独立窗口 <kbd>⌘ ⇧ O</kbd></span>
+                  <span>显示/隐藏侧栏 <kbd>⌘ \\</kbd></span>
+                  <span>移动块 <kbd>⌥ ↑ / ↓</kbd></span>
+                  <span>打开光标下链接 <kbd>⌘ ↵</kbd></span>
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {activeSection === "models" || activeSection === "ai-chat" ? (
+            <AiSettings
+              section={activeSection}
+              providers={aiProviders}
+              chatSystemPrompt={settings.chatSystemPrompt}
+              semanticSearchEnabled={settings.semanticSearchEnabled}
+              onChange={setAiProviders}
+              onChatSystemPromptChange={(chatSystemPrompt) =>
+                setSettings((current) => ({ ...current, chatSystemPrompt }))
+              }
+              onSemanticSearchChange={(semanticSearchEnabled) =>
+                setSettings((current) => ({ ...current, semanticSearchEnabled }))
+              }
+              onNotice={toast}
+            />
+          ) : null}
+
+          {activeSection === "assets" ? (
+            <section>
+              <h2>资源 AI 描述</h2>
+              <SettingToggle
+                label="自动描述新资源"
+                description="仅处理被公开笔记引用、且未被任何私密笔记引用的图片、SVG 和 PDF"
+                checked={settings.describeAssets}
+                onChange={(describeAssets) =>
+                  setSettings((current) => ({ ...current, describeAssets }))
+                }
+              />
+              <div className="setting-row">
+                <div>
+                  <strong>描述现有资源</strong>
+                  <small>会调用你的默认 AI 供应商，可能产生费用；已有同哈希描述不会重复生成</small>
+                </div>
+                <button type="button" onClick={() => void runAssetDescriptions()}>开始</button>
+              </div>
+            </section>
+          ) : null}
+
+          {activeSection === "templates" ? (
+            <TemplateSettings
+              notebookId={notebook.id}
+              templates={templates}
+              onChange={setTemplates}
+              onNotice={toast}
+            />
+          ) : null}
+
+          {activeSection === "capture" ? (
+            <CaptureSettings notebookId={notebook.id} onNotice={toast} />
+          ) : null}
+
+          {activeSection === "sync" ? (
+            <SyncSettings
+              notebookId={notebook.id}
+              config={syncConfig}
+              onChange={setSyncConfig}
+              onSynced={() => void refreshNotebooks()}
+              onNotice={toast}
+            />
+          ) : null}
+
+          {activeSection === "data" ? (
+            <section>
+              <h2>笔记空间与导出</h2>
+              <div className="setting-row">
+                <div>
+                  <strong>新建笔记空间</strong>
+                  <small>在当前知识库中创建独立的笔记、模板、Chat 历史和导出范围</small>
+                </div>
+                <button type="button" onClick={newNotebook}>新建</button>
+              </div>
+              <div className="setting-row">
+                <div>
+                  <strong>Markdown 导出</strong>
+                  <small>将当前笔记空间导出为保留目录结构的 ZIP</small>
+                </div>
+                <a href={`/api/export?notebookId=${notebook.id}`}>导出</a>
+              </div>
+            </section>
+          ) : null}
         </div>
       </section>
-      <AiSettings
-        providers={aiProviders}
-        chatSystemPrompt={settings.chatSystemPrompt}
-        semanticSearchEnabled={settings.semanticSearchEnabled}
-        onChange={setAiProviders}
-        onChatSystemPromptChange={(chatSystemPrompt) =>
-          setSettings((current) => ({ ...current, chatSystemPrompt }))
-        }
-        onSemanticSearchChange={(semanticSearchEnabled) =>
-          setSettings((current) => ({ ...current, semanticSearchEnabled }))
-        }
-        onNotice={toast}
-      />
-      <section>
-        <h2>资源 AI 描述</h2>
-        <SettingToggle
-          label="自动描述新资源"
-          description="仅处理被公开笔记引用、且未被任何私密笔记引用的图片、SVG 和 PDF"
-          checked={settings.describeAssets}
-          onChange={(describeAssets) =>
-            setSettings((current) => ({ ...current, describeAssets }))
-          }
-        />
-        <div className="setting-row">
-          <div>
-            <strong>描述现有资源</strong>
-            <small>会调用你的默认 AI 供应商，可能产生费用；已有同哈希描述不会重复生成</small>
-          </div>
-          <button type="button" onClick={() => void runAssetDescriptions()}>开始</button>
-        </div>
-      </section>
-      <TemplateSettings
-        notebookId={notebook.id}
-        templates={templates}
-        onChange={setTemplates}
-        onNotice={toast}
-      />
-      <CaptureSettings notebookId={notebook.id} onNotice={toast} />
-      <SyncSettings
-        notebookId={notebook.id}
-        config={syncConfig}
-        onChange={setSyncConfig}
-        onSynced={() => void refreshNotebooks()}
-        onNotice={toast}
-      />
-      <section>
-        <h2>数据</h2>
-        <div className="setting-row">
-          <div>
-            <strong>新建笔记空间</strong>
-            <small>在当前知识库中创建独立的笔记、模板、Chat 历史和导出范围</small>
-          </div>
-          <button type="button" onClick={newNotebook}>新建</button>
-        </div>
-        <div className="setting-row">
-          <div>
-            <strong>Markdown 导出</strong>
-            <small>将当前笔记空间导出为保留目录结构的 ZIP</small>
-          </div>
-          <a href={`/api/export?notebookId=${notebook.id}`}>导出</a>
-        </div>
-      </section>
-    </section>
-  );
+    );
+  };
 
   let content;
   if (selected) {
@@ -2058,7 +2231,7 @@ export function ReflectWorkspace() {
           url.searchParams.set("target", documentId);
           window.open(url, "_blank", "noopener,noreferrer");
         }}
-        onConfigureAI={() => navigate({ kind: "settings" })}
+        onConfigureAI={() => navigate({ kind: "settings", section: "models" })}
         onModelSelectionChange={(chatModelSelection) =>
           setSettings((current) => ({ ...current, chatModelSelection }))
         }
@@ -2072,7 +2245,7 @@ export function ReflectWorkspace() {
       />
     );
   } else if (view.kind === "settings") {
-    content = renderSettings();
+    content = renderSettings(view.section ?? "general");
   } else {
     content = (
       <div className="empty-state">

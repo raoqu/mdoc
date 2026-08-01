@@ -67,4 +67,4 @@ for _ in {1..40}; do
 done
 
 echo "启动 TypeScript 前端（HMR 已启用）；/api 与 /site 已自动代理到后端。"
-pnpm run dev
+pnpm run dev:frontend
