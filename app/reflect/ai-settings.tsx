@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, KeyRound, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Check, Download, ExternalLink, KeyRound, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { AI_PROVIDER_CATALOG, type AiProviderConfig, type AiProviderId } from "./ai";
 
 interface AiSettingsProps {
@@ -19,12 +19,33 @@ const CHAT_SYSTEM_PROMPT_MAX_LENGTH = 20_000;
 interface SemanticStatus {
   enabled: boolean;
   available: boolean;
-  status: "disabled" | "unavailable" | "idle" | "indexing" | "ready" | "failed";
+  status: "disabled" | "unavailable" | "idle" | "downloading" | "indexing" | "ready" | "failed";
   model?: string;
   indexed: number;
   total: number;
   message?: string;
+  modelDownload: {
+    status: "missing" | "probing" | "downloading" | "verifying" | "installed" | "failed";
+    source?: string;
+    sourceLabel?: string;
+    downloaded: number;
+    total: number;
+    bytesPerSecond?: number;
+    currentFile?: string;
+    fileIndex?: number;
+    fileTotal?: number;
+    target: string;
+    message?: string;
+    sources: Array<{ id: string; label: string; url: string }>;
+  };
 }
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** unit).toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+};
 
 export function AiSettings({
   providers,
@@ -47,6 +68,7 @@ export function AiSettings({
   const [baseUrl, setBaseUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [semanticStatus, setSemanticStatus] = useState<SemanticStatus | null>(null);
+  const [semanticModelSource, setSemanticModelSource] = useState("auto");
 
   useEffect(() => {
     let active = true;
@@ -59,10 +81,11 @@ export function AiSettings({
         if (!active) return;
         setSemanticStatus(next);
         if (
-          semanticSearchEnabled &&
-          (next.status === "idle" ||
-            next.status === "disabled" ||
-            next.status === "indexing")
+          next.status === "downloading" ||
+          (semanticSearchEnabled &&
+            (next.status === "idle" ||
+              next.status === "disabled" ||
+              next.status === "indexing"))
         ) {
           timer = window.setTimeout(() => void refresh(), 600);
         }
@@ -75,6 +98,13 @@ export function AiSettings({
             indexed: 0,
             total: 0,
             message: "无法连接本地语义索引服务。",
+            modelDownload: {
+              status: "failed",
+              downloaded: 0,
+              total: 0,
+              target: "~/.mdoc/models",
+              sources: [],
+            },
           });
         }
       }
@@ -93,6 +123,22 @@ export function AiSettings({
       setSemanticStatus((await response.json()) as SemanticStatus);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "无法重建语义索引");
+    }
+  };
+
+  const downloadSemanticModel = async () => {
+    try {
+      const response = await fetch("/api/semantic/model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: semanticModelSource, enable: true }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      setSemanticStatus((await response.json()) as SemanticStatus);
+      onSemanticSearchChange(true);
+      onNotice("模型下载已开始；完成后会自动建立语义索引");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "无法下载语义模型");
     }
   };
 
@@ -186,11 +232,44 @@ export function AiSettings({
       </p>
       <div className="setting-row semantic-setting-row">
         <span>
-          <strong>本地语义检索</strong>
+          <strong>本地语义搜索</strong>
           <small>
-            按含义而不只是关键词检索笔记。句向量和索引完全在本机生成，私密笔记不会进入索引。
+            在全局搜索和 AI Chat
+            中按含义检索笔记。句向量和索引完全在本机生成，私密笔记不会进入索引。
           </small>
-          {semanticStatus?.status === "indexing" ? (
+          {semanticStatus?.modelDownload.sources.length ? (
+            <small className="semantic-model-sources">
+              模型源：{semanticStatus.modelDownload.sources.map((source, index) => (
+                <span key={source.id}>
+                  {index > 0 ? " · " : ""}
+                  <a href={source.url} target="_blank" rel="noreferrer">
+                    {source.label}<ExternalLink size={10} />
+                  </a>
+                </span>
+              ))}
+            </small>
+          ) : null}
+          {semanticStatus?.status === "downloading" ? (
+            <span className="semantic-progress">
+              <progress
+                max={Math.max(semanticStatus.modelDownload.total, 1)}
+                value={semanticStatus.modelDownload.downloaded}
+                aria-label="语义模型下载进度"
+              />
+              <small>
+                {semanticStatus.modelDownload.status === "probing"
+                  ? "正在探测并选择更快的下载源…"
+                  : semanticStatus.modelDownload.status === "verifying"
+                    ? "正在校验模型文件…"
+                    : `正在从 ${semanticStatus.modelDownload.sourceLabel ?? "模型源"} 下载：${formatBytes(semanticStatus.modelDownload.downloaded)} / ${formatBytes(semanticStatus.modelDownload.total)}${semanticStatus.modelDownload.bytesPerSecond ? ` · ${formatBytes(semanticStatus.modelDownload.bytesPerSecond)}/s` : ""}`}
+              </small>
+              {semanticStatus.modelDownload.currentFile ? (
+                <small>
+                  {semanticStatus.modelDownload.fileIndex}/{semanticStatus.modelDownload.fileTotal} · {semanticStatus.modelDownload.currentFile}
+                </small>
+              ) : null}
+            </span>
+          ) : semanticStatus?.status === "indexing" ? (
             <span className="semantic-progress">
               <progress
                 max={Math.max(semanticStatus.total, 1)}
@@ -211,8 +290,27 @@ export function AiSettings({
           ) : null}
         </span>
         <div className="semantic-setting-actions">
-          {semanticSearchEnabled &&
-          semanticStatus?.status !== "unavailable" ? (
+          {semanticStatus?.status === "downloading" ? (
+            <button type="button" disabled>
+              <Download size={13} /> 下载中…
+            </button>
+          ) : semanticStatus?.available === false ? (
+            <>
+              <select
+                value={semanticModelSource}
+                onChange={(event) => setSemanticModelSource(event.target.value)}
+                aria-label="语义模型下载源"
+              >
+                <option value="auto">自动选择</option>
+                {semanticStatus.modelDownload.sources.map((source) => (
+                  <option value={source.id} key={source.id}>{source.label}</option>
+                ))}
+              </select>
+              <button type="button" onClick={() => void downloadSemanticModel()}>
+                <Download size={13} /> 下载并启用
+              </button>
+            </>
+          ) : semanticSearchEnabled ? (
             <>
               <button
                 type="button"
@@ -231,7 +329,6 @@ export function AiSettings({
           ) : (
             <button
               type="button"
-              disabled={semanticStatus?.available === false}
               onClick={() => onSemanticSearchChange(true)}
             >
               <Sparkles size={13} /> 启用

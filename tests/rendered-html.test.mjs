@@ -62,6 +62,8 @@ test("ships the migrated editor and graph capabilities", async () => {
   assert.match(tasks, /tasksIn/);
   assert.match(tasks, /任务筛选/);
   assert.match(workspace, /CommandPalette/);
+  assert.match(workspace, /\/api\/semantic\/similar/);
+  assert.match(workspace, /相似笔记/);
   assert.match(markdown, /WIKI_LINK_PATTERN/);
   assert.match(markdown, /TASK_PATTERN/);
   assert.match(sidebar, /className="knowledge-base-footer"/);

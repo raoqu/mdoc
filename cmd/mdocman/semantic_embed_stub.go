@@ -2,6 +2,6 @@
 
 package main
 
-func newPlatformSemanticEmbedder() semanticEmbedder {
+func newSystemSemanticEmbedder() semanticEmbedder {
 	return unavailableSemanticEmbedder{}
 }

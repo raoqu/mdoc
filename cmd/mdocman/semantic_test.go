@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +133,103 @@ func TestSemanticHybridSearchFindsMeaningAndExcludesPrivateNotes(t *testing.T) {
 	}
 }
 
+func TestGlobalSearchIncludesSemanticOnlyMatches(t *testing.T) {
+	instance, _, closeServer := readySemanticTestServer(t)
+	defer closeServer()
+	putChatToolDocument(t, instance, "public-car", "Garage checklist", "An automobile needs regular maintenance before a long journey.", false)
+	putChatToolDocument(t, instance, "fruit", "Fruit notes", "Bananas ripen quickly in a paper bag.", false)
+	putChatToolDocument(t, instance, "secret-car", "Secret garage", "---\nprivate: true\n---\nA confidential automobile schedule nobody may read.", false)
+
+	indexed, total, err := instance.semantic.rebuild(instance.database(), instance.uploadsDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.semantic.mu.Lock()
+	instance.semantic.status.Status = "ready"
+	instance.semantic.status.Indexed = indexed
+	instance.semantic.status.Total = total
+	instance.semantic.readyDB = instance.database()
+	instance.semantic.mu.Unlock()
+
+	request := httptest.NewRequest(http.MethodGet, "/api/search?q=vehicle+upkeep&notebookId=book", nil)
+	response := httptest.NewRecorder()
+	instance.search(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var hits []searchHit
+	if err = json.Unmarshal(response.Body.Bytes(), &hits); err != nil {
+		t.Fatal(err)
+	}
+	foundPublic := false
+	for _, hit := range hits {
+		if hit.ID == "public-car" {
+			foundPublic = true
+		}
+		if hit.ID == "secret-car" {
+			t.Fatalf("private semantic hit leaked: %s", response.Body.String())
+		}
+	}
+	if !foundPublic {
+		t.Fatalf("semantic-only match missing: %s", response.Body.String())
+	}
+}
+
+func TestFuseSearchResultsRewardsAgreementAndKeepsLexicalTiePriority(t *testing.T) {
+	lexical := []searchHit{{ID: "exact", Title: "Exact"}, {ID: "both", Title: "Both"}}
+	semantic := []searchHit{{ID: "meaning", Title: "Meaning"}, {ID: "both", Title: "Both"}}
+	fused := fuseSearchResults([][]searchHit{lexical, semantic}, 10)
+	if len(fused) != 3 {
+		t.Fatalf("fused = %#v", fused)
+	}
+	if fused[0].ID != "both" {
+		t.Fatalf("agreement should rank first: %#v", fused)
+	}
+	if fused[1].ID != "exact" || fused[2].ID != "meaning" {
+		t.Fatalf("lexical tie should win: %#v", fused)
+	}
+}
+
+func TestSemanticSimilarNotesExcludesSourceUnrelatedAndPrivateNotes(t *testing.T) {
+	instance, _, closeServer := readySemanticTestServer(t)
+	defer closeServer()
+	putChatToolDocument(t, instance, "car-source", "Car source", "An automobile maintenance checklist.", false)
+	putChatToolDocument(t, instance, "car-related", "Road trip", "A vehicle needs servicing before a journey.", false)
+	putChatToolDocument(t, instance, "fruit", "Fruit", "Bananas ripen in a paper bag.", false)
+	putChatToolDocument(t, instance, "car-private", "Private garage", "A private car repair log.", true)
+
+	indexed, total, err := instance.semantic.rebuild(instance.database(), instance.uploadsDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.semantic.mu.Lock()
+	instance.semantic.status.Status = "ready"
+	instance.semantic.status.Indexed = indexed
+	instance.semantic.status.Total = total
+	instance.semantic.readyDB = instance.database()
+	instance.semantic.mu.Unlock()
+
+	hits, err := instance.semantic.similar(instance.database(), "book", "car-source", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].DocumentID != "car-related" {
+		t.Fatalf("similar hits = %#v", hits)
+	}
+}
+
+func TestSemanticSimilarEndpointReportsNotReady(t *testing.T) {
+	instance, closeServer := chatToolTestServer(t)
+	defer closeServer()
+	instance.semantic = newSemanticServiceWithEmbedder(&fakeSemanticEmbedder{})
+	request := httptest.NewRequest(http.MethodGet, "/api/semantic/similar?documentId=one&notebookId=book", nil)
+	response := httptest.NewRecorder()
+	instance.semanticSimilar(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestSemanticRebuildSkipsUnchangedDocumentHashes(t *testing.T) {
 	instance, embedder, closeServer := readySemanticTestServer(t)
 	defer closeServer()
@@ -196,6 +295,35 @@ func TestPlatformSentenceEmbeddingIsNormalizedWhenAvailable(t *testing.T) {
 		if math.Abs(norm-1) > 0.0001 {
 			t.Fatalf("vector norm = %f", norm)
 		}
+	}
+}
+
+func TestMiniLMModelProducesUseful384DimensionEmbeddings(t *testing.T) {
+	directory, err := locateSemanticModelDirectory()
+	if err != nil {
+		t.Skip(err)
+	}
+	embedder := &modelSemanticEmbedder{directory: directory}
+	embeddings, err := embedder.EmbedBatch([]string{
+		"How do I repair a bicycle tire?",
+		"Steps for fixing a flat bike wheel",
+		"A recipe for chocolate cake",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(embeddings) != 3 {
+		t.Fatalf("embeddings = %d", len(embeddings))
+	}
+	for _, embedding := range embeddings {
+		if embedding.ModelID != semanticModelID || embedding.Language != "und" || len(embedding.Values) != semanticModelDimensions {
+			t.Fatalf("embedding metadata = %#v", embedding)
+		}
+	}
+	similar := semanticDot(embeddings[0].Values, embeddings[1].Values)
+	unrelated := semanticDot(embeddings[0].Values, embeddings[2].Values)
+	if similar <= unrelated+0.2 {
+		t.Fatalf("similarity separation too small: similar=%f unrelated=%f", similar, unrelated)
 	}
 }
 

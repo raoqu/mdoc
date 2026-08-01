@@ -1620,10 +1620,14 @@ kbd {
 .semantic-setting-row { align-items: flex-start; margin-bottom: 14px; }
 .semantic-setting-row > span { flex: 1; }
 .semantic-setting-actions { display: flex; flex: none; flex-direction: row !important; gap: 6px !important; }
+.semantic-setting-actions select { min-width: 92px; padding: 6px 24px 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-secondary); font-size: 10px; }
 .semantic-setting-actions button { display: inline-flex; min-width: 0; align-items: center; justify-content: center; gap: 5px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-secondary); cursor: pointer; font-size: 10px; }
 .semantic-setting-actions button:disabled { cursor: not-allowed; opacity: .45; }
 .semantic-progress { display: flex; width: min(320px, 100%); flex-direction: column; gap: 4px; }
 .semantic-progress progress { width: 100%; height: 5px; accent-color: var(--accent); }
+.semantic-model-sources { display: flex !important; flex-wrap: wrap; align-items: center; gap: 2px; }
+.semantic-model-sources a { display: inline-flex; align-items: center; gap: 2px; color: var(--accent); text-decoration: none; }
+.semantic-model-sources a:hover { text-decoration: underline; }
 .semantic-ready { color: var(--success) !important; }
 .semantic-error { color: var(--danger) !important; }
 .ai-settings-section > textarea {

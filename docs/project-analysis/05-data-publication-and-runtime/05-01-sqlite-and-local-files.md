@@ -60,7 +60,7 @@
 ## 8. 依赖关系
 
 上游是所有 Go 业务模块；下游是 `modernc.org/sqlite`、用户目录、文件权限、
-SQLite FTS5 和平台句向量。Keychain 与数据库只通过 provider ID 或 credential
+SQLite FTS5 和本地 ONNX 句向量。Keychain 与数据库只通过 provider ID 或 credential
 account 字符串关联。
 
 ## 9. 配置项
@@ -70,8 +70,9 @@ account 字符串关联。
 - SQLite DSN 启用 `foreign_keys(1)` 与 `journal_mode(WAL)`。
 - 上传：`~/.mdoc/uploads/`；音频：`~/.mdoc/audio-memos/`。
 - Git 工作副本：`data/sync/`；静态站点：`public-site/`，后二者相对当前工作目录。
-- 语义向量以归一化 `float32` 小端 BLOB 保存；macOS 模型 ID 包含语言与系统
-  revision，关闭语义检索只暂停使用和增量工作，不删除已有本地索引。
+- 语义向量以归一化 `float32` 小端 BLOB 保存；默认模型 ID 为
+  `all-MiniLM-L6-v2`，模型目录由 `MDOC_SEMANTIC_MODEL_DIR` 或
+  `~/.mdoc/models/` 定位。关闭语义搜索只暂停使用和增量工作，不删除已有索引。
 
 ## 10. 错误处理
 

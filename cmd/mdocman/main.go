@@ -519,6 +519,31 @@ func (s *server) search(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, []searchHit{})
 		return
 	}
+	hits, err := s.lexicalSearch(query, notebookID, 30)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if semantic, semanticErr := s.semanticRuntime().search(s.database(), notebookID, query, 30); semanticErr == nil {
+		semanticHits := make([]searchHit, 0, len(semantic))
+		for _, hit := range semantic {
+			snippet, _ := truncateRunes(hit.Snippet, 220)
+			if hit.Heading != "" {
+				snippet = hit.Heading + " · " + snippet
+			}
+			semanticHits = append(semanticHits, searchHit{
+				ID:        hit.DocumentID,
+				Title:     hit.Title,
+				Snippet:   snippet,
+				UpdatedAt: hit.UpdatedAt,
+			})
+		}
+		hits = fuseSearchResults([][]searchHit{hits, semanticHits}, 30)
+	}
+	jsonOut(w, hits)
+}
+
+func (s *server) lexicalSearch(query, notebookID string, limit int) ([]searchHit, error) {
 	terms := strings.Fields(query)
 	for i, term := range terms {
 		terms[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"*`
@@ -528,22 +553,67 @@ func (s *server) search(w http.ResponseWriter, r *http.Request) {
 snippet(documents_fts,2,'<mark>','</mark>','…',18),d.updated_at
 FROM documents_fts JOIN documents d ON d.id=documents_fts.document_id
 WHERE documents_fts MATCH ? AND d.trashed=0 AND (?='' OR d.notebook_id=?)
-ORDER BY bm25(documents_fts),d.updated_at DESC LIMIT 30`, expression, notebookID, notebookID)
+ORDER BY bm25(documents_fts),d.updated_at DESC LIMIT ?`, expression, notebookID, notebookID, limit)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return nil, err
 	}
 	defer rows.Close()
 	hits := []searchHit{}
 	for rows.Next() {
 		var hit searchHit
 		if err = rows.Scan(&hit.ID, &hit.Title, &hit.Snippet, &hit.UpdatedAt); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+			return nil, err
 		}
 		hits = append(hits, hit)
 	}
-	jsonOut(w, hits)
+	return hits, rows.Err()
+}
+
+func fuseSearchResults(lists [][]searchHit, limit int) []searchHit {
+	const damping = 60.0
+	type fusedSearchHit struct {
+		hit            searchHit
+		score          float64
+		firstListIndex int
+		firstRank      int
+	}
+	fused := map[string]fusedSearchHit{}
+	for listIndex, list := range lists {
+		for rank, hit := range list {
+			entry, exists := fused[hit.ID]
+			entry.score += 1 / (damping + float64(rank) + 1)
+			if !exists {
+				entry.hit = hit
+				entry.firstListIndex = listIndex
+				entry.firstRank = rank
+			}
+			fused[hit.ID] = entry
+		}
+	}
+	items := make([]fusedSearchHit, 0, len(fused))
+	for _, item := range fused {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(left, right int) bool {
+		if items[left].score != items[right].score {
+			return items[left].score > items[right].score
+		}
+		if items[left].firstListIndex != items[right].firstListIndex {
+			return items[left].firstListIndex < items[right].firstListIndex
+		}
+		if items[left].firstRank != items[right].firstRank {
+			return items[left].firstRank < items[right].firstRank
+		}
+		return items[left].hit.Title < items[right].hit.Title
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	result := make([]searchHit, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.hit)
+	}
+	return result
 }
 
 func safeName(s string) string {
@@ -1026,6 +1096,8 @@ func main() {
 	http.HandleFunc("/api/ai/conversations", cors(s.aiConversations))
 	http.HandleFunc("/api/ai/conversations/", cors(s.aiConversation))
 	http.HandleFunc("/api/semantic", cors(s.semanticSettings))
+	http.HandleFunc("/api/semantic/model", cors(s.semanticModelDownload))
+	http.HandleFunc("/api/semantic/similar", cors(s.semanticSimilar))
 	http.HandleFunc("/api/templates", cors(s.templates))
 	http.HandleFunc("/api/templates/", cors(s.template))
 	http.HandleFunc("/api/capture/tokens", cors(s.captureTokens))

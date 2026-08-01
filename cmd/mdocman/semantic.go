@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,14 +38,15 @@ var (
 )
 
 type semanticIndexStatus struct {
-	Enabled    bool   `json:"enabled"`
-	Available  bool   `json:"available"`
-	Status     string `json:"status"`
-	Model      string `json:"model,omitempty"`
-	Indexed    int    `json:"indexed"`
-	Total      int    `json:"total"`
-	Message    string `json:"message,omitempty"`
-	LastUpdate string `json:"lastUpdate,omitempty"`
+	Enabled       bool                        `json:"enabled"`
+	Available     bool                        `json:"available"`
+	Status        string                      `json:"status"`
+	Model         string                      `json:"model,omitempty"`
+	Indexed       int                         `json:"indexed"`
+	Total         int                         `json:"total"`
+	Message       string                      `json:"message,omitempty"`
+	LastUpdate    string                      `json:"lastUpdate,omitempty"`
+	ModelDownload semanticModelDownloadStatus `json:"modelDownload"`
 }
 
 type semanticTextChunk struct {
@@ -73,17 +75,19 @@ type semanticSearchHit struct {
 }
 
 type semanticService struct {
-	mu            sync.RWMutex
-	embedMu       sync.Mutex
-	embedder      semanticEmbedder
-	enabled       bool
-	running       bool
-	rerun         bool
-	force         bool
-	targetDB      *sql.DB
-	targetUploads string
-	readyDB       *sql.DB
-	status        semanticIndexStatus
+	mu                  sync.RWMutex
+	embedMu             sync.Mutex
+	embedder            semanticEmbedder
+	enabled             bool
+	running             bool
+	rerun               bool
+	force               bool
+	targetDB            *sql.DB
+	targetUploads       string
+	readyDB             *sql.DB
+	status              semanticIndexStatus
+	downloader          *semanticModelDownloader
+	enableAfterDownload bool
 }
 
 func newSemanticService() *semanticService {
@@ -101,13 +105,17 @@ func newSemanticServiceWithEmbedder(embedder semanticEmbedder) *semanticService 
 	} else {
 		status.Status = "unavailable"
 		status.Message = "当前平台没有可用的本地句向量运行时。"
+		if reporter, ok := embedder.(interface{ UnavailableReason() string }); ok {
+			status.Message = reporter.UnavailableReason()
+		}
 	}
-	return &semanticService{embedder: embedder, status: status}
+	return &semanticService{embedder: embedder, status: status, downloader: newSemanticModelDownloader()}
 }
 
 func (service *semanticService) configure(enabled bool) semanticIndexStatus {
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	service.enableAfterDownload = enabled
 	service.enabled = enabled && service.status.Available
 	service.status.Enabled = service.enabled
 	if !service.status.Available {
@@ -128,14 +136,84 @@ func (service *semanticService) configure(enabled bool) semanticIndexStatus {
 
 func (service *semanticService) snapshot(db *sql.DB) semanticIndexStatus {
 	service.mu.RLock()
-	defer service.mu.RUnlock()
 	status := service.status
+	downloader := service.downloader
 	if status.Status == "ready" && service.readyDB != db {
 		status.Status = "idle"
 		status.Indexed = 0
 		status.Total = 0
 	}
+	service.mu.RUnlock()
+	if downloader != nil {
+		status.ModelDownload = downloader.snapshot()
+		switch status.ModelDownload.Status {
+		case "probing", "downloading", "verifying":
+			status.Status = "downloading"
+			status.Message = status.ModelDownload.Message
+		case "failed":
+			if !status.Available {
+				status.Status = "unavailable"
+				status.Message = status.ModelDownload.Message
+			}
+		}
+	}
 	return status
+}
+
+func (service *semanticService) requestModelDownload(source string, enable bool, database func() *sql.DB, uploadsDir string) error {
+	service.mu.Lock()
+	if enable {
+		service.enableAfterDownload = true
+	}
+	downloader := service.downloader
+	service.mu.Unlock()
+	if downloader == nil {
+		return errors.New("模型下载器不可用")
+	}
+	return downloader.start(source, func(directory string, err error) {
+		if err != nil {
+			service.mu.Lock()
+			if !service.status.Available {
+				service.status.Status = "unavailable"
+				service.status.Message = err.Error()
+			}
+			service.mu.Unlock()
+			return
+		}
+		directory, err = validateSemanticModelDirectory(directory)
+		if err != nil {
+			service.mu.Lock()
+			service.status.Status = "unavailable"
+			service.status.Message = err.Error()
+			service.mu.Unlock()
+			return
+		}
+		embedder := &modelSemanticEmbedder{directory: directory}
+		service.mu.Lock()
+		service.embedder = embedder
+		service.status.Available = true
+		service.status.Model = embedder.DisplayName()
+		service.status.Message = ""
+		service.status.Indexed = 0
+		service.status.Total = 0
+		service.readyDB = nil
+		shouldEnable := service.enableAfterDownload
+		service.enabled = shouldEnable
+		service.status.Enabled = shouldEnable
+		if shouldEnable {
+			service.status.Status = "idle"
+		} else {
+			service.status.Status = "disabled"
+		}
+		service.mu.Unlock()
+		if shouldEnable {
+			var db *sql.DB
+			if database != nil {
+				db = database()
+			}
+			service.requestRebuild(db, uploadsDir, true)
+		}
+	})
 }
 
 func (service *semanticService) readyFor(db *sql.DB) bool {
@@ -333,14 +411,27 @@ func (service *semanticService) indexDocument(db *sql.DB, uploadsDir string, doc
 	}
 	chunks := semanticChunks(document.Content, assets)
 	embedded := make([]semanticEmbedding, 0, len(chunks))
-	for _, chunk := range chunks {
-		service.embedMu.Lock()
-		vector, err := service.embedder.Embed(chunk.Text)
-		service.embedMu.Unlock()
-		if err != nil {
-			return false, err
+	var err error
+	service.embedMu.Lock()
+	if batchEmbedder, ok := service.embedder.(semanticBatchEmbedder); ok {
+		texts := make([]string, len(chunks))
+		for index, chunk := range chunks {
+			texts[index] = chunk.Text
 		}
-		embedded = append(embedded, vector)
+		embedded, err = batchEmbedder.EmbedBatch(texts)
+	} else {
+		for _, chunk := range chunks {
+			var vector semanticEmbedding
+			vector, err = service.embedder.Embed(chunk.Text)
+			if err != nil {
+				break
+			}
+			embedded = append(embedded, vector)
+		}
+	}
+	service.embedMu.Unlock()
+	if err != nil {
+		return false, err
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -439,6 +530,104 @@ WHERE c.notebook_id=? AND c.model_id=? AND c.language=?
 	}
 	if len(hits) > candidateLimit {
 		hits = hits[:candidateLimit]
+	}
+	return hits, rows.Err()
+}
+
+func (service *semanticService) similar(db *sql.DB, notebookID, documentID string, limit int) ([]semanticSearchHit, error) {
+	if !service.readyFor(db) {
+		return nil, errSemanticNotReady
+	}
+	queryRows, err := db.Query(`SELECT model_id,language,vector FROM semantic_chunks WHERE document_id=? AND notebook_id=?`, documentID, notebookID)
+	if err != nil {
+		return nil, err
+	}
+	type comparableVector struct {
+		modelID  string
+		language string
+		values   []float32
+	}
+	queryVectors := []comparableVector{}
+	for queryRows.Next() {
+		var modelID, language string
+		var encoded []byte
+		if err = queryRows.Scan(&modelID, &language, &encoded); err != nil {
+			queryRows.Close()
+			return nil, err
+		}
+		values, decodeErr := decodeSemanticVector(encoded)
+		if decodeErr == nil {
+			queryVectors = append(queryVectors, comparableVector{modelID: modelID, language: language, values: values})
+		}
+	}
+	if err = queryRows.Close(); err != nil {
+		return nil, err
+	}
+	if len(queryVectors) == 0 {
+		return []semanticSearchHit{}, nil
+	}
+
+	rows, err := db.Query(`SELECT c.document_id,d.title,d.content,c.heading,c.text,d.updated_at,c.model_id,c.language,c.vector
+FROM semantic_chunks c JOIN documents d ON d.id=c.document_id
+WHERE c.notebook_id=? AND c.document_id<>? AND d.notebook_id=? AND d.trashed=0 AND d.private=0`,
+		notebookID, documentID, notebookID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	best := map[string]semanticSearchHit{}
+	for rows.Next() {
+		var candidate semanticSearchHit
+		var content, modelID, language string
+		var encoded []byte
+		if err = rows.Scan(
+			&candidate.DocumentID,
+			&candidate.Title,
+			&content,
+			&candidate.Heading,
+			&candidate.Snippet,
+			&candidate.UpdatedAt,
+			&modelID,
+			&language,
+			&encoded,
+		); err != nil {
+			return nil, err
+		}
+		if frontmatterPrivate(content) {
+			continue
+		}
+		values, decodeErr := decodeSemanticVector(encoded)
+		if decodeErr != nil {
+			continue
+		}
+		for _, queryVector := range queryVectors {
+			if queryVector.modelID != modelID || queryVector.language != language || len(queryVector.values) != len(values) {
+				continue
+			}
+			score := semanticDot(queryVector.values, values)
+			if score < semanticMinimumScore {
+				continue
+			}
+			current, exists := best[candidate.DocumentID]
+			if !exists || score > current.Score {
+				candidate.Score = score
+				candidate.Snippet, _ = truncateRunes(candidate.Snippet, 220)
+				best[candidate.DocumentID] = candidate
+			}
+		}
+	}
+	hits := make([]semanticSearchHit, 0, len(best))
+	for _, hit := range best {
+		hits = append(hits, hit)
+	}
+	sort.Slice(hits, func(left, right int) bool {
+		if hits[left].Score == hits[right].Score {
+			return hits[left].Title < hits[right].Title
+		}
+		return hits[left].Score > hits[right].Score
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
 	}
 	return hits, rows.Err()
 }
@@ -662,7 +851,14 @@ func (s *server) semanticSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		runtime.configure(input.Enabled)
 		if input.Enabled {
-			runtime.requestRebuild(db, s.uploadsDir(), false)
+			status := runtime.snapshot(db)
+			if status.Available {
+				runtime.requestRebuild(db, s.uploadsDir(), false)
+			} else if err := runtime.requestModelDownload("auto", true, s.database, s.uploadsDir()); err != nil &&
+				!errors.Is(err, errSemanticModelDownloadRunning) && !errors.Is(err, errSemanticModelAlreadyInstalled) {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
 		}
 		jsonOut(w, runtime.snapshot(db))
 	case http.MethodPost:
@@ -676,4 +872,75 @@ func (s *server) semanticSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *server) semanticModelDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input struct {
+		Source string `json:"source"`
+		Enable bool   `json:"enable"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	runtime := s.semanticRuntime()
+	if err := runtime.requestModelDownload(input.Source, input.Enable, s.database, s.uploadsDir()); err != nil {
+		switch {
+		case errors.Is(err, errSemanticModelDownloadRunning):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, errSemanticModelAlreadyInstalled):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, errSemanticModelUnsupportedSource):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
+		return
+	}
+	jsonOut(w, runtime.snapshot(s.database()))
+}
+
+func (s *server) semanticSimilar(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	documentID := strings.TrimSpace(r.URL.Query().Get("documentId"))
+	notebookID := strings.TrimSpace(r.URL.Query().Get("notebookId"))
+	if documentID == "" || notebookID == "" {
+		http.Error(w, "documentId and notebookId are required", http.StatusBadRequest)
+		return
+	}
+	if !s.semanticRuntime().readyFor(s.database()) {
+		http.Error(w, errSemanticNotReady.Error(), http.StatusConflict)
+		return
+	}
+	var private, trashed int
+	err := s.database().QueryRow(`SELECT private,trashed FROM documents WHERE id=? AND notebook_id=?`, documentID, notebookID).Scan(&private, &trashed)
+	if err == sql.ErrNoRows {
+		http.Error(w, "document not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if private != 0 || trashed != 0 {
+		jsonOut(w, []semanticSearchHit{})
+		return
+	}
+	limit := 5
+	if requested, parseErr := strconv.Atoi(r.URL.Query().Get("limit")); parseErr == nil && requested > 0 {
+		limit = min(requested, 10)
+	}
+	hits, err := s.semanticRuntime().similar(s.database(), notebookID, documentID, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOut(w, hits)
 }

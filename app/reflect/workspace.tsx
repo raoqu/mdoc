@@ -89,6 +89,14 @@ const ReflectEditor = dynamic(
   },
 );
 
+interface SimilarNoteHit {
+  documentId: string;
+  title: string;
+  heading: string;
+  snippet: string;
+  score: number;
+}
+
 const WELCOME_NOTEBOOK: NotebookRecord = {
   id: "welcome",
   title: "我的知识库",
@@ -239,6 +247,7 @@ export function ReflectWorkspace() {
   const [audioMemoOpen, setAudioMemoOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [contextOpen, setContextOpen] = useState(true);
+  const [similarNotes, setSimilarNotes] = useState<SimilarNoteHit[] | null>(null);
   const [settings, setSettings] = useState<WorkspaceSettings>(DEFAULT_SETTINGS);
   const [aiProviders, setAiProviders] = useState<AiProviderConfig[]>([]);
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
@@ -886,7 +895,10 @@ export function ReflectWorkspace() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const modifier = event.metaKey || event.ctrlKey;
-      if (modifier && event.key.toLocaleLowerCase() === "k") {
+      if (modifier && event.key.toLocaleLowerCase() === "s") {
+        event.preventDefault();
+        void persist();
+      } else if (modifier && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen(true);
       } else if (modifier && event.key.toLocaleLowerCase() === "n") {
@@ -925,7 +937,7 @@ export function ReflectWorkspace() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigate, newNote, view]);
+  }, [navigate, newNote, persist, view]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 720px)");
@@ -1038,6 +1050,55 @@ export function ReflectWorkspace() {
     notebook,
     noteViewDocumentId,
     settings.startWithBullet,
+  ]);
+
+  const similarDocumentId = selected?.document.id ?? "";
+  const similarDocumentPrivate = selected?.document.private === true;
+  useEffect(() => {
+    if (
+      !contextOpen ||
+      !settings.semanticSearchEnabled ||
+      !similarDocumentId ||
+      similarDocumentPrivate
+    ) {
+      setSimilarNotes(null);
+      return;
+    }
+    const controller = new AbortController();
+    let retryTimer = 0;
+    const load = async () => {
+      try {
+        const response = await fetch(
+          `/api/semantic/similar?documentId=${encodeURIComponent(similarDocumentId)}&notebookId=${encodeURIComponent(notebook.id)}&limit=5`,
+          { signal: controller.signal },
+        );
+        if (response.status === 409) {
+          retryTimer = window.setTimeout(() => void load(), 1_500);
+          return;
+        }
+        if (!response.ok) {
+          setSimilarNotes([]);
+          return;
+        }
+        setSimilarNotes((await response.json()) as SimilarNoteHit[]);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setSimilarNotes([]);
+        }
+      }
+    };
+    setSimilarNotes(null);
+    void load();
+    return () => {
+      controller.abort();
+      window.clearTimeout(retryTimer);
+    };
+  }, [
+    contextOpen,
+    notebook.id,
+    settings.semanticSearchEnabled,
+    similarDocumentId,
+    similarDocumentPrivate,
   ]);
 
   const changeDocument = useCallback(
@@ -1647,6 +1708,32 @@ export function ReflectWorkspace() {
                 </p>
               ) : null}
             </section>
+            {settings.semanticSearchEnabled &&
+            !location.document.private &&
+            similarNotes !== null ? (
+              <section>
+                <h3>相似笔记 <span>{similarNotes.length}</span></h3>
+                {similarNotes.map((similar) => (
+                  <button
+                    type="button"
+                    className="backlink-card"
+                    key={similar.documentId}
+                    onClick={() =>
+                      navigate({ kind: "note", documentId: similar.documentId })
+                    }
+                  >
+                    <strong>{similar.title}</strong>
+                    <small>
+                      {similar.heading ? `${similar.heading} · ` : ""}
+                      {similar.snippet.slice(0, 120)}
+                    </small>
+                  </button>
+                ))}
+                {similarNotes.length === 0 ? (
+                  <p className="empty-copy">暂未找到含义相近的笔记。</p>
+                ) : null}
+              </section>
+            ) : null}
             <section className="note-actions">
               <label>
                 <input

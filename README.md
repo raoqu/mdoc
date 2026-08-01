@@ -6,7 +6,7 @@
 
 ## 开发
 
-需要 Go 1.22+、Node.js 22+、pnpm 11+。
+需要 Go 1.24+、Node.js 22+、pnpm 11+。
 
 ```bash
 ./dev.sh
@@ -16,6 +16,37 @@
 请求自动代理到后端。按 `Ctrl+C` 会同时停止两个进程。数据目录固定为
 `~/.mdoc/`：SQLite 数据库直接保存在该目录，上传图片和音频分别保存在
 `~/.mdoc/uploads/` 与 `~/.mdoc/audio-memos/`。
+
+## 本地语义搜索
+
+语义搜索使用 `all-MiniLM-L6-v2` ONNX 模型在 Go 进程内生成 384 维句向量，
+不需要 Python、云端 Embedding API 或单独安装 ONNX Runtime。启用后，模型用于
+`⌘K`/`Ctrl+K` 全局混合搜索、AI Chat 检索和笔记详情中的“相似笔记”。私密笔记
+不会进入语义索引。
+
+默认模型目录为：
+
+```text
+~/.mdoc/models/Qdrant-all-MiniLM-L6-v2-onnx/
+```
+
+首次启用时，内置的 getmodel 下载流程会同时探测
+[Hugging Face](https://huggingface.co/Qdrant/all-MiniLM-L6-v2-onnx) 和
+[ModelScope](https://modelscope.cn/models/sentence-transformers/all-MiniLM-L6-v2)，自动选择可用且更快的源，
+并在设置界面显示文件名、已下载字节、速度和总进度。未完成文件使用 `.part`
+保存，网络恢复或重启应用后可断点续传；也可以在界面中固定选择某一个源。
+
+下载后的目录包含 `model.onnx`、`tokenizer.json`、`config.json`、
+`special_tokens_map.json` 和 `tokenizer_config.json`。每个文件都会校验大小和
+SHA256，全部完成后才加载模型。也可以手动准备模型，并通过环境变量指定模型
+目录：
+
+```bash
+MDOC_SEMANTIC_MODEL_DIR=/path/to/Qdrant-all-MiniLM-L6-v2-onnx ./mdoc
+```
+
+在“设置 → AI Chat → 本地语义搜索”中启用后，后台会按标题和句子边界增量建立
+索引；模型或分块版本变化时会自动重算，也可以手动点击重建按钮。
 
 左侧栏底部显示当前知识库。点击后可切换已有知识库、调整知识库颜色、在 Finder
 中定位或新建知识库；当前选择记录在 `~/.mdoc/workspace.json`，重启后会自动恢复。

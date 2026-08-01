@@ -18,7 +18,7 @@ import (
 
 type appleNaturalLanguageEmbedder struct{}
 
-func newPlatformSemanticEmbedder() semanticEmbedder {
+func newSystemSemanticEmbedder() semanticEmbedder {
 	return appleNaturalLanguageEmbedder{}
 }
 
