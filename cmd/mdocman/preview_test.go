@@ -51,6 +51,26 @@ func TestMarkdownBodyKeepsUnterminatedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestMarkdownFrontmatterTitle(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		source   string
+		fallback string
+		want     string
+	}{
+		{name: "plain", source: "---\ntitle: 文档标题\n---\n正文", fallback: "filename", want: "文档标题"},
+		{name: "quoted", source: "---\ntitle: \"文档: 标题\"\n---\n正文", fallback: "filename", want: "文档: 标题"},
+		{name: "missing", source: "---\nprivate: false\n---\n正文", fallback: "filename", want: "filename"},
+		{name: "invalid", source: "---\ntitle: [\n---\n正文", fallback: "filename", want: "filename"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := markdownFrontmatterTitle(test.source, test.fallback); got != test.want {
+				t.Fatalf("markdownFrontmatterTitle() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestPreviewPageHasNoHeader(t *testing.T) {
 	if strings.Contains(previewPage, "<header") || strings.Contains(previewPage, "Markdown 预览") {
 		t.Fatalf("preview header is still present")
@@ -143,6 +163,9 @@ func TestDefaultPreviewThemeDefinesTypographyContract(t *testing.T) {
 		".mermaid-expand {",
 		".mermaid-lightbox {",
 		".mermaid-lightbox-stage {",
+		".path-tree-directory-fold > summary {",
+		".path-tree-directory-toggle > summary {",
+		".path-tree-directory:has(",
 	} {
 		if !strings.Contains(css, expected) {
 			t.Fatalf("default.css missing theme contract %q", expected)
@@ -165,6 +188,22 @@ func TestPreviewMermaidScriptProvidesLightboxZoom(t *testing.T) {
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("preview-mermaid.js missing lightbox/zoom support %q", expected)
+		}
+	}
+}
+
+func TestPreviewThemeScriptPreservesPathTreeState(t *testing.T) {
+	script := mustReadPreviewAsset("preview-theme.js")
+	for _, expected := range []string{
+		"data-path-tree-id",
+		"details[data-path-tree-key]",
+		"mdocman.preview.tree.",
+		`addEventListener("toggle"`,
+		"directory.open",
+		"localStorage.setItem(storageKey, JSON.stringify(nextState))",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("preview-theme.js missing path tree state support %q", expected)
 		}
 	}
 }
@@ -312,8 +351,8 @@ func TestPathPreviewDirectoryModeShowsMarkdownTreeWithoutExtensions(t *testing.T
 
 	body := serveTestPath(t, preview, "/guide/getting%20started.md")
 	for _, expected := range []string{
-		`<aside class="path-tree">`,
-		`<summary>guide</summary>`,
+		`<aside class="path-tree" data-path-tree-id="`,
+		`class="path-tree-directory-fold" data-path-tree-key="guide" open><summary>guide</summary>`,
 		`href="/README.md"`,
 		`href="/guide/getting%20started.md" class="active" aria-current="page">getting started</a>`,
 	} {
@@ -321,10 +360,146 @@ func TestPathPreviewDirectoryModeShowsMarkdownTreeWithoutExtensions(t *testing.T
 			t.Fatalf("directory tree missing %q: %s", expected, body)
 		}
 	}
-	for _, unexpected := range []string{">README.md</a>", ">getting started.md</a>", "ignored.txt", "<summary>empty</summary>"} {
+	for _, unexpected := range []string{">README.md</a>", ">getting started.md</a>", "ignored.txt", `path-tree-directory-name">empty</span>`} {
 		if strings.Contains(body, unexpected) {
 			t.Fatalf("directory tree unexpectedly contains %q: %s", unexpected, body)
 		}
+	}
+}
+
+func TestPathPreviewUsesFrontmatterTitlesInPageAndTree(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "index.md"), "---\ntitle: 文档中心\n---\n# Home\n")
+	writeTestFile(t, filepath.Join(root, "plain.md"), "# Plain\n")
+	writeTestFile(t, filepath.Join(root, "guide", "index.md"), "---\ntitle: 使用指南\n---\n# Guide\n")
+	writeTestFile(t, filepath.Join(root, "guide", "getting-started.md"), "---\ntitle: 快速开始\n---\n# Start\n")
+	writeTestFile(t, filepath.Join(root, "reference", "index.md"), "---\ntitle: API 参考\n---\n# API\n")
+
+	preview, err := newPathPreviewServer(root, goldmark.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := serveTestPath(t, preview, "/guide/getting-started.md")
+	for _, expected := range []string{
+		`<title>快速开始 · 预览</title>`,
+		`class="path-tree-directory-link" href="/guide/">使用指南</a>`,
+		`class="path-tree-directory-link" href="/reference/">API 参考</a>`,
+		`href="/guide/getting-started.md" class="active" aria-current="page">快速开始</a>`,
+		`href="/plain.md">plain</a>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("frontmatter preview missing %q: %s", expected, body)
+		}
+	}
+	for _, unexpected := range []string{`class="path-tree-title"`, `>文档中心</b>`, `href="/index.md"`, `href="/guide/index.md"`, `href="/reference/index.md"`, ">index</a>"} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("frontmatter preview unexpectedly contains %q: %s", unexpected, body)
+		}
+	}
+
+	guide := serveTestPath(t, preview, "/guide/")
+	if !strings.Contains(guide, `<title>使用指南 · 预览</title>`) || !strings.Contains(guide, `<h1>Guide</h1>`) {
+		t.Fatalf("directory index did not use its frontmatter title: %s", guide)
+	}
+}
+
+func TestPathPreviewTreeSortsBySortThenTitleThenFilename(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "sort-3.md"), "---\nsort: 3\ntitle: 第三个\n---\n")
+	writeTestFile(t, filepath.Join(root, "sorted-folder", "index.md"), "---\nsort: 10\ntitle: 第十个目录\n---\n")
+	writeTestFile(t, filepath.Join(root, "sort-20.md"), "---\nsort: 20\ntitle: 第二十个\n---\n")
+	writeTestFile(t, filepath.Join(root, "00-titled.md"), "---\ntitle: 有标题\n---\n")
+	writeTestFile(t, filepath.Join(root, "alpha.md"), "# Alpha\n")
+	writeTestFile(t, filepath.Join(root, "z-folder", "child.md"), "# Child\n")
+
+	preview, err := newPathPreviewServer(root, goldmark.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := serveTestPath(t, preview, "/alpha.md")
+
+	last := -1
+	for _, expected := range []string{
+		`>第三个</a>`,
+		`<summary>第十个目录</summary>`,
+		`>第二十个</a>`,
+		`>alpha</a>`,
+		`<summary>z-folder</summary>`,
+		`>有标题</a>`,
+	} {
+		position := strings.Index(body, expected)
+		if position < 0 {
+			t.Fatalf("sorted tree missing %q: %s", expected, body)
+		}
+		if position <= last {
+			t.Fatalf("tree node %q is out of order: %s", expected, body)
+		}
+		last = position
+	}
+}
+
+func TestPathPreviewComparesFallbackSortKeysTogether(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "06-engineering", "child.md"), "# Engineering\n")
+	writeTestFile(t, filepath.Join(root, "07-key-concepts", "index.md"), "---\ntitle: 关键概念\nsort: 07-关键概念\n---\n")
+	writeTestFile(t, filepath.Join(root, "07-key-concepts", "concept.md"), "# Concept\n")
+
+	preview, err := newPathPreviewServer(root, goldmark.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := serveTestPath(t, preview, "/06-engineering/child.md")
+	engineering := strings.Index(body, `<summary>06-engineering</summary>`)
+	concepts := strings.Index(body, `<summary>关键概念</summary>`)
+	if engineering < 0 || concepts < 0 || engineering >= concepts {
+		t.Fatalf("fallback sort keys were not compared together: %s", body)
+	}
+}
+
+func TestPathPreviewDirectoryNameIsLiteralWithoutIndex(t *testing.T) {
+	root := t.TempDir()
+	directory := "02-01-transport-secure-channel$传输安全通道"
+	writeTestFile(t, filepath.Join(root, directory, "child.md"), "# Child\n")
+
+	preview, err := newPathPreviewServer(root, goldmark.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := serveTestPath(t, preview, "/"+directory+"/child.md")
+	expected := `class="path-tree-directory-fold" data-path-tree-key="02-01-transport-secure-channel$传输安全通道" open><summary>02-01-transport-secure-channel$传输安全通道</summary>`
+	if !strings.Contains(body, expected) {
+		t.Fatalf("literal directory name missing %q: %s", expected, body)
+	}
+}
+
+func TestPathPreviewDirectoryLinkRequiresVisibleIndexBody(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "visible", "index.md"), "---\ntitle: 可查看目录\n---\n\n# 正文\n")
+	writeTestFile(t, filepath.Join(root, "visible", "child.md"), "# Child\n")
+	writeTestFile(t, filepath.Join(root, "empty", "index.md"), "---\ntitle: 空目录\n---\n \n\t\n")
+	writeTestFile(t, filepath.Join(root, "empty", "empty-child.md"), "# Empty index child\n")
+
+	preview, err := newPathPreviewServer(root, goldmark.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := serveTestPath(t, preview, "/visible/")
+
+	for _, expected := range []string{
+		`class="path-tree-directory-link active" href="/visible/" aria-current="page">可查看目录</a>`,
+		`class="path-tree-directory-fold" data-path-tree-key="empty" open><summary>空目录</summary>`,
+		`href="/empty/empty-child.md">empty-child</a>`,
+		`class="path-tree-directory-toggle" data-path-tree-key="visible" open><summary aria-label="展开或折叠 可查看目录"`,
+		`</summary></details><a class="path-tree-directory-link active"`,
+		`<h1>正文</h1>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("directory index behavior missing %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, `href="/empty/"`) {
+		t.Fatalf("empty directory index unexpectedly became viewable: %s", body)
 	}
 }
 
@@ -339,7 +514,7 @@ func TestPathPreviewSingleFileModeDoesNotShowDirectoryTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := serveTestPath(t, preview, "/")
-	if strings.Contains(body, `<aside class="path-tree">`) || strings.Contains(body, ">sibling</a>") {
+	if strings.Contains(body, `<aside class="path-tree"`) || strings.Contains(body, ">sibling</a>") {
 		t.Fatalf("single-file preview unexpectedly showed directory tree: %s", body)
 	}
 }

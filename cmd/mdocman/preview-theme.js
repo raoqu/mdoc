@@ -80,3 +80,45 @@
     }
   });
 })();
+
+(() => {
+  const tree = document.querySelector("[data-path-tree-id]");
+  if (!(tree instanceof HTMLElement) || !tree.dataset.pathTreeId) {
+    return;
+  }
+
+  const storageKey = `mdocman.preview.tree.${tree.dataset.pathTreeId}`;
+  const directories = Array.from(
+    tree.querySelectorAll("details[data-path-tree-key]"),
+  );
+
+  const readState = () => {
+    try {
+      const value = JSON.parse(localStorage.getItem(storageKey) || "{}");
+      return value && typeof value === "object" ? value : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const savedState = readState();
+  directories.forEach((directory) => {
+    const directoryKey = directory.dataset.pathTreeKey;
+    if (!directoryKey) {
+      return;
+    }
+    const stateKey = `node:${directoryKey}`;
+    if (typeof savedState[stateKey] === "boolean") {
+      directory.open = savedState[stateKey];
+    }
+    directory.addEventListener("toggle", () => {
+      const nextState = readState();
+      nextState[stateKey] = directory.open;
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(nextState));
+      } catch {
+        // Navigation still works when storage is disabled.
+      }
+    });
+  });
+})();

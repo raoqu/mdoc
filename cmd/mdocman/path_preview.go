@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"html/template"
 	"io"
@@ -32,15 +33,24 @@ type pathPreviewEntry struct {
 }
 
 type pathPreviewTreeNode struct {
-	Name     string
-	URL      string
-	IsDir    bool
-	Active   bool
-	Children []pathPreviewTreeNode
+	Name        string
+	URL         string
+	TreeKey     string
+	IsDir       bool
+	Active      bool
+	NameToggles bool
+	Children    []pathPreviewTreeNode
+	order       pathPreviewOrder
 }
 
-const pathPreviewPage = `<!doctype html><html lang="zh-CN" data-preview-theme="default"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><link rel="stylesheet" href="/_mdoc/themes/default.css"><link id="preview-theme-stylesheet" rel="stylesheet" href="/_mdoc/themes/default.css"><script defer src="/_mdoc/preview-theme.js"></script><script type="module" src="/_mdoc/preview-mermaid.js"></script></head><body>` + previewThemeMenu + `<div class="layout">{{if .ShowTree}}<aside class="path-tree"><b class="path-tree-title" title="{{.RootTitle}}">{{.RootTitle}}</b>{{template "tree" .Tree}}</aside>{{end}}<main><article>{{if .Directory}}<h1>{{.Title}}</h1><ul class="directory-list">{{range .Entries}}<li><a href="{{.URL}}">{{if .IsDir}}📁 {{else}}📄 {{end}}{{.Name}}</a></li>{{else}}<li>此目录中没有 Markdown 文件。</li>{{end}}</ul>{{else}}{{.HTML}}{{end}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>
-{{define "tree"}}<ul>{{range .}}{{if .IsDir}}<li><details open><summary>{{.Name}}</summary>{{template "tree" .Children}}</details></li>{{else}}<li><a href="{{.URL}}"{{if .Active}} class="active" aria-current="page"{{end}}>{{.Name}}</a></li>{{end}}{{end}}</ul>{{end}}`
+type pathPreviewOrder struct {
+	text    string
+	number  float64
+	numeric bool
+}
+
+const pathPreviewPage = `<!doctype html><html lang="zh-CN" data-preview-theme="default"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><link rel="stylesheet" href="/_mdoc/themes/default.css"><link id="preview-theme-stylesheet" rel="stylesheet" href="/_mdoc/themes/default.css"><script defer src="/_mdoc/preview-theme.js"></script><script type="module" src="/_mdoc/preview-mermaid.js"></script></head><body>` + previewThemeMenu + `<div class="layout">{{if .ShowTree}}<aside class="path-tree" data-path-tree-id="{{.TreeID}}">{{template "tree" .Tree}}</aside>{{end}}<main><article>{{if .Directory}}<h1>{{.Title}}</h1><ul class="directory-list">{{range .Entries}}<li><a href="{{.URL}}">{{if .IsDir}}📁 {{else}}📄 {{end}}{{.Name}}</a></li>{{else}}<li>此目录中没有 Markdown 文件。</li>{{end}}</ul>{{else}}{{.HTML}}{{end}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>
+{{define "tree"}}<ul>{{range .}}{{if .IsDir}}{{if .NameToggles}}<li><details class="path-tree-directory-fold" data-path-tree-key="{{.TreeKey}}" open><summary>{{.Name}}</summary>{{template "tree" .Children}}</details></li>{{else}}<li class="path-tree-directory"><div class="path-tree-directory-row">{{if .Children}}<details class="path-tree-directory-toggle" data-path-tree-key="{{.TreeKey}}" open><summary aria-label="展开或折叠 {{.Name}}" title="展开或折叠"></summary></details>{{else}}<span class="path-tree-directory-toggle-spacer"></span>{{end}}{{if .URL}}<a class="path-tree-directory-link{{if .Active}} active{{end}}" href="{{.URL}}"{{if .Active}} aria-current="page"{{end}}>{{.Name}}</a>{{else}}<span class="path-tree-directory-name">{{.Name}}</span>{{end}}</div>{{template "tree" .Children}}</li>{{end}}{{else}}<li><a href="{{.URL}}"{{if .Active}} class="active" aria-current="page"{{end}}>{{.Name}}</a></li>{{end}}{{end}}</ul>{{end}}`
 
 func pathPreviewArgument(args []string) (string, bool) {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
@@ -153,7 +163,10 @@ func (p *pathPreviewServer) renderMarkdownFile(w http.ResponseWriter, filename s
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	title := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	title := markdownFrontmatterTitle(
+		string(content),
+		strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)),
+	)
 	renderer := &server{md: p.md}
 	p.writePage(w, pathPreviewPageData{
 		Title: title,
@@ -198,7 +211,7 @@ func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, directory, re
 
 type pathPreviewPageData struct {
 	Title     string
-	RootTitle string
+	TreeID    string
 	HTML      template.HTML
 	Themes    []previewTheme
 	ShowTree  bool
@@ -208,10 +221,10 @@ type pathPreviewPageData struct {
 }
 
 func (p *pathPreviewServer) writePage(w http.ResponseWriter, data pathPreviewPageData, activeFilename string) {
-	data.RootTitle = filepath.Base(p.root)
 	data.ShowTree = p.directoryMode
 	data.Themes = previewThemes
 	if p.directoryMode {
+		data.TreeID = fmt.Sprintf("%x", sha256.Sum256([]byte(p.root)))[:16]
 		activeRelative := ""
 		if activeFilename != "" {
 			activeRelative, _ = filepath.Rel(p.root, activeFilename)
@@ -239,6 +252,9 @@ func (p *pathPreviewServer) buildTree(directory, activeRelative string) ([]pathP
 	}
 	nodes := make([]pathPreviewTreeNode, 0, len(items))
 	for _, item := range items {
+		if item.Type()&os.ModeSymlink != 0 {
+			continue
+		}
 		itemPath := filepath.Join(directory, item.Name())
 		relative, err := filepath.Rel(p.root, itemPath)
 		if err != nil {
@@ -249,11 +265,25 @@ func (p *pathPreviewServer) buildTree(directory, activeRelative string) ([]pathP
 			if err != nil {
 				return nil, err
 			}
-			if len(children) > 0 {
+			name, index, viewable, order := pathPreviewDirectoryMetadata(itemPath, item.Name())
+			hasIndex := index != ""
+			if len(children) > 0 || hasIndex {
+				url := ""
+				active := false
+				if viewable {
+					url = pathPreviewDirectoryURL(relative)
+					indexRelative, _ := filepath.Rel(p.root, index)
+					active = filepath.Clean(indexRelative) == filepath.Clean(activeRelative)
+				}
 				nodes = append(nodes, pathPreviewTreeNode{
-					Name:     item.Name(),
-					IsDir:    true,
-					Children: children,
+					Name:        name,
+					URL:         url,
+					TreeKey:     filepath.ToSlash(relative),
+					IsDir:       true,
+					Active:      active,
+					NameToggles: !viewable,
+					Children:    children,
+					order:       order,
 				})
 			}
 			continue
@@ -261,17 +291,20 @@ func (p *pathPreviewServer) buildTree(directory, activeRelative string) ([]pathP
 		if !isMarkdownPath(item.Name()) {
 			continue
 		}
+		if strings.EqualFold(item.Name(), "index.md") {
+			continue
+		}
+		name := strings.TrimSuffix(item.Name(), filepath.Ext(item.Name()))
+		name, order := pathPreviewMarkdownMetadata(itemPath, name, item.Name())
 		nodes = append(nodes, pathPreviewTreeNode{
-			Name:   strings.TrimSuffix(item.Name(), filepath.Ext(item.Name())),
+			Name:   name,
 			URL:    pathPreviewURL(relative),
 			Active: filepath.Clean(relative) == filepath.Clean(activeRelative),
+			order:  order,
 		})
 	}
 	sort.SliceStable(nodes, func(i, j int) bool {
-		if nodes[i].IsDir != nodes[j].IsDir {
-			return nodes[i].IsDir
-		}
-		return strings.ToLower(nodes[i].Name) < strings.ToLower(nodes[j].Name)
+		return pathPreviewNodeLess(nodes[i], nodes[j])
 	})
 	return nodes, nil
 }
@@ -280,18 +313,126 @@ func pathPreviewURL(relative string) string {
 	return (&url.URL{Path: "/" + filepath.ToSlash(relative)}).EscapedPath()
 }
 
+func pathPreviewDirectoryURL(relative string) string {
+	return strings.TrimSuffix(pathPreviewURL(relative), "/") + "/"
+}
+
 func escapedPathSegment(segment string) string {
 	return (&url.URL{Path: segment}).EscapedPath()
 }
 
 func markdownIndex(directory string) string {
-	for _, name := range []string{"README.md", "readme.md", "index.md", "INDEX.md"} {
+	if index := pathPreviewIndex(directory); index != "" {
+		return index
+	}
+	for _, name := range []string{"README.md", "readme.md"} {
 		candidate := filepath.Join(directory, name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
 	}
 	return ""
+}
+
+func pathPreviewIndex(directory string) string {
+	items, err := os.ReadDir(directory)
+	if err != nil {
+		return ""
+	}
+	for _, item := range items {
+		if !item.IsDir() && item.Type()&os.ModeSymlink == 0 && strings.EqualFold(item.Name(), "index.md") {
+			return filepath.Join(directory, item.Name())
+		}
+	}
+	return ""
+}
+
+func pathPreviewMarkdownMetadata(filename, titleFallback, filenameFallback string) (string, pathPreviewOrder) {
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return titleFallback, pathPreviewOrder{text: filenameFallback}
+	}
+	return pathPreviewSourceMetadata(string(content), titleFallback, filenameFallback)
+}
+
+func pathPreviewDirectoryMetadata(directory, fallback string) (string, string, bool, pathPreviewOrder) {
+	index := pathPreviewIndex(directory)
+	if index == "" {
+		return fallback, "", false, pathPreviewOrder{text: fallback}
+	}
+	content, err := os.ReadFile(index)
+	if err != nil {
+		return fallback, index, false, pathPreviewOrder{text: fallback}
+	}
+	source := string(content)
+	title, order := pathPreviewSourceMetadata(source, fallback, fallback)
+	_, body, _ := splitMarkdownFrontmatter(source)
+	return title, index, strings.TrimSpace(body) != "", order
+}
+
+func pathPreviewSourceMetadata(source, titleFallback, filenameFallback string) (string, pathPreviewOrder) {
+	metadata, ok := parseMarkdownFrontmatterMetadata(source)
+	if !ok {
+		return titleFallback, pathPreviewOrder{text: filenameFallback}
+	}
+	title := strings.TrimSpace(metadata.Title)
+	displayTitle := title
+	if displayTitle == "" {
+		displayTitle = titleFallback
+	}
+	if order, ok := pathPreviewSortOrder(metadata.Sort); ok {
+		return displayTitle, order
+	}
+	if title != "" {
+		return displayTitle, pathPreviewOrder{text: title}
+	}
+	return displayTitle, pathPreviewOrder{text: filenameFallback}
+}
+
+func pathPreviewSortOrder(value any) (pathPreviewOrder, bool) {
+	switch value := value.(type) {
+	case string:
+		if value = strings.TrimSpace(value); value != "" {
+			return pathPreviewOrder{text: value}, true
+		}
+	case int:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case int8:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case int16:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case int32:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case int64:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case uint:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case uint8:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case uint16:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case uint32:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case uint64:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case float32:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: float64(value), numeric: true}, true
+	case float64:
+		return pathPreviewOrder{text: fmt.Sprint(value), number: value, numeric: true}, true
+	}
+	return pathPreviewOrder{}, false
+}
+
+func pathPreviewNodeLess(left, right pathPreviewTreeNode) bool {
+	if left.order.numeric && right.order.numeric && left.order.number != right.order.number {
+		return left.order.number < right.order.number
+	}
+	leftKey := strings.ToLower(left.order.text)
+	rightKey := strings.ToLower(right.order.text)
+	if leftKey != rightKey {
+		return leftKey < rightKey
+	}
+	return strings.ToLower(left.Name) < strings.ToLower(right.Name)
 }
 
 func isMarkdownPath(filename string) bool {

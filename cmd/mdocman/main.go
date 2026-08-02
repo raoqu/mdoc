@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yuin/goldmark"
+	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
 
@@ -790,17 +791,50 @@ var renderedImageSizePattern = regexp.MustCompile(` title="mdocman-size-(\d+)x(\
 var frontmatterOpenPattern = regexp.MustCompile(`^---[ \t]*\r?\n`)
 var frontmatterClosePattern = regexp.MustCompile(`(?m)^---[ \t]*(?:\r?\n|$)`)
 
-func markdownBody(source string) string {
+func splitMarkdownFrontmatter(source string) (string, string, bool) {
 	open := frontmatterOpenPattern.FindStringIndex(source)
 	if open == nil {
-		return source
+		return "", source, false
 	}
 	rest := source[open[1]:]
 	close := frontmatterClosePattern.FindStringIndex(rest)
 	if close == nil {
-		return source
+		return "", source, false
 	}
-	return rest[close[1]:]
+	return rest[:close[0]], rest[close[1]:], true
+}
+
+func markdownBody(source string) string {
+	_, body, _ := splitMarkdownFrontmatter(source)
+	return body
+}
+
+type markdownFrontmatterMetadata struct {
+	Title string `yaml:"title"`
+	Sort  any    `yaml:"sort"`
+}
+
+func parseMarkdownFrontmatterMetadata(source string) (markdownFrontmatterMetadata, bool) {
+	frontmatter, _, ok := splitMarkdownFrontmatter(source)
+	if !ok {
+		return markdownFrontmatterMetadata{}, false
+	}
+	var metadata markdownFrontmatterMetadata
+	if err := yaml.Unmarshal([]byte(frontmatter), &metadata); err != nil {
+		return markdownFrontmatterMetadata{}, false
+	}
+	return metadata, true
+}
+
+func markdownFrontmatterTitle(source, fallback string) string {
+	metadata, ok := parseMarkdownFrontmatterMetadata(source)
+	if !ok {
+		return fallback
+	}
+	if title := strings.TrimSpace(metadata.Title); title != "" {
+		return title
+	}
+	return fallback
 }
 
 func prepareImageMetadataForRender(markdown string) string {
@@ -882,6 +916,7 @@ func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "未命名笔记"
 	}
+	title = markdownFrontmatterTitle(content, title)
 	writePreviewPage(w, title, s.render(markdownBody(content)))
 }
 
