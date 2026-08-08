@@ -201,6 +201,11 @@ func TestPreviewThemeScriptPreservesPathTreeState(t *testing.T) {
 		`addEventListener("toggle"`,
 		"directory.open",
 		"localStorage.setItem(storageKey, JSON.stringify(nextState))",
+		"scrollStorageKey",
+		"sessionStorage.getItem(scrollStorageKey)",
+		"sessionStorage.setItem(scrollStorageKey, String(tree.scrollTop))",
+		"scrollFrame = requestAnimationFrame",
+		`addEventListener("pagehide"`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("preview-theme.js missing path tree state support %q", expected)

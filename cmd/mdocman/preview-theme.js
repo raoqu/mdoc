@@ -88,6 +88,7 @@
   }
 
   const storageKey = `mdocman.preview.tree.${tree.dataset.pathTreeId}`;
+  const scrollStorageKey = `${storageKey}.scroll`;
   const directories = Array.from(
     tree.querySelectorAll("details[data-path-tree-key]"),
   );
@@ -121,4 +122,53 @@
       }
     });
   });
+
+  const readScrollTop = () => {
+    try {
+      const storedValue = sessionStorage.getItem(scrollStorageKey);
+      if (storedValue === null) {
+        return null;
+      }
+      const value = Number(storedValue);
+      return Number.isFinite(value) && value >= 0 ? value : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const saveScrollTop = () => {
+    try {
+      sessionStorage.setItem(scrollStorageKey, String(tree.scrollTop));
+    } catch {
+      // Navigation still works when storage is disabled.
+    }
+  };
+
+  const savedScrollTop = readScrollTop();
+  if (savedScrollTop !== null) {
+    requestAnimationFrame(() => {
+      tree.scrollTop = savedScrollTop;
+    });
+  }
+
+  let scrollFrame = 0;
+  tree.addEventListener(
+    "scroll",
+    () => {
+      if (scrollFrame) {
+        return;
+      }
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0;
+        saveScrollTop();
+      });
+    },
+    { passive: true },
+  );
+  tree.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("a[href]")) {
+      saveScrollTop();
+    }
+  });
+  window.addEventListener("pagehide", saveScrollTop);
 })();
