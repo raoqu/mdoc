@@ -28,6 +28,7 @@ import {
   Bold,
   Braces,
   CheckSquare,
+  ClipboardPaste,
   Heading2,
   ImagePlus,
   Italic,
@@ -53,6 +54,10 @@ import type {
   WorkspaceSettings,
 } from "./types";
 import { hasConflictMarkers, resolveConflictMarkers } from "./markdown";
+import {
+  chooseClipboardInsertion,
+  readClipboardTextContent,
+} from "./clipboard";
 
 export interface ReflectEditorHandle {
   focus(): void;
@@ -546,6 +551,44 @@ export function ReflectEditor({
     input.click();
   }, [handleFilePaste]);
 
+  const pasteFromClipboard = useCallback(async () => {
+    const editor = editorRef.current;
+    if (!editor) {
+      onNotice("当前笔记无法编辑");
+      return;
+    }
+
+    const wasEditing = editor.editor?.view.hasFocus() ?? false;
+    try {
+      const insertion = chooseClipboardInsertion(
+        await readClipboardTextContent(),
+      );
+      if (!insertion) {
+        onNotice("剪贴板中没有可粘贴的文本内容");
+        return;
+      }
+
+      if (!wasEditing) {
+        editor.setSelection("end");
+      }
+
+      if (insertion.kind === "rich-text") {
+        editor.editor?.view.pasteHTML(insertion.html);
+      } else {
+        editor.insertMarkdown(insertion.text);
+      }
+      editor.focus();
+      editor.scrollIntoView();
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "NotAllowedError"
+        ? "无法读取剪贴板，请允许剪贴板访问后重试"
+        : error instanceof Error
+          ? error.message
+          : "读取剪贴板失败";
+      onNotice(message);
+    }
+  }, [onNotice]);
+
   const resolveFileLink = useCallback(
     ({ href }: { href: string }) => href.startsWith("/uploads/"),
     [],
@@ -703,6 +746,15 @@ export function ReflectEditor({
           onClick={insertAttachment}
         >
           <Paperclip size={16} strokeWidth={1.8} />
+        </button>
+        <button
+          type="button"
+          title="智能粘贴"
+          aria-label="智能粘贴"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void pasteFromClipboard()}
+        >
+          <ClipboardPaste size={16} strokeWidth={1.8} />
         </button>
         <div className="toolbar-hint">
           输入 <kbd>/</kbd> 插入内容 · 点击或拖拽图片可调整尺寸

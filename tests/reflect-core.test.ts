@@ -37,6 +37,10 @@ import {
   type AiProviderConfig,
 } from "../app/reflect/ai";
 import { interleaveChatTools } from "../app/reflect/chat-transcript";
+import {
+  chooseClipboardInsertion,
+  looksLikeMarkdown,
+} from "../app/reflect/clipboard";
 
 test("chat model options expose every curated model per configured key", () => {
   const providers: AiProviderConfig[] = [
@@ -272,6 +276,44 @@ test("legacy linked images migrate to renderable image metadata", () => {
     ),
     '![cover](/uploads/cover.png)<!-- {"width":522,"height":294,"href":"https://example.com"} -->',
   );
+});
+
+test("smart paste prefers explicit or recognizable Markdown source", () => {
+  assert.equal(looksLikeMarkdown("## Heading\n\n- first\n- second"), true);
+  assert.equal(looksLikeMarkdown("A plain sentence with punctuation."), false);
+  assert.deepEqual(
+    chooseClipboardInsertion({
+      plainText: "## Heading\n\n**important**",
+      html: "<h2>Heading</h2><p><strong>important</strong></p>",
+    }),
+    { kind: "markdown", text: "## Heading\n\n**important**" },
+  );
+  assert.deepEqual(
+    chooseClipboardInsertion({
+      markdown: "- source",
+      plainText: "source",
+      html: "<ul><li>source</li></ul>",
+    }),
+    { kind: "markdown", text: "- source" },
+  );
+});
+
+test("smart paste keeps rich formatting and falls back to plain text", () => {
+  assert.deepEqual(
+    chooseClipboardInsertion({
+      plainText: "Heading\nimportant",
+      html: "<h2>Heading</h2><p><strong>important</strong></p>",
+    }),
+    {
+      kind: "rich-text",
+      html: "<h2>Heading</h2><p><strong>important</strong></p>",
+    },
+  );
+  assert.deepEqual(chooseClipboardInsertion({ plainText: "plain text" }), {
+    kind: "plain-text",
+    text: "plain text",
+  });
+  assert.equal(chooseClipboardInsertion({ plainText: "  " }), undefined);
 });
 
 test("month grid pads full Monday-first weeks and labels months", () => {
