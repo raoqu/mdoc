@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { formatPublicationTarget, parsePublicationTarget } from "../app/reflect/publication-target";
 import { deployPublication, PublicationSetupError, type PublicationStatus } from "../app/reflect/publication-api";
+import { isEmptyNewNoteDraft, mergeNewNoteDrafts, notebooksWithSavableDrafts, UNTITLED_NOTE_TITLE } from "../app/reflect/note-drafts";
+import { documentsInNotebook, type NotebookRecord } from "../app/reflect/types";
+import { noteDeletionConfirmation } from "../app/reflect/note-deletion";
 import {
   aliasesFromFrontmatter,
   joinFrontmatter,
@@ -381,6 +384,78 @@ test("an unopened daily-note draft stays empty until content changes", () => {
     isEmptyDailyNoteDraft("# 修改过的标题\n\n", date),
     false,
   );
+});
+
+test("new-note drafts distinguish empty editor scaffolding from title or body input", () => {
+  for (const content of ["", "   \n", "# \n\n", "#\r\n\r\n- ", "---\nprivate: true\n---\n# \n"]) {
+    assert.equal(isEmptyNewNoteDraft({ title: UNTITLED_NOTE_TITLE, content }), true, content);
+  }
+  for (const document of [
+    { title: "只有标题", content: "" },
+    { title: UNTITLED_NOTE_TITLE, content: "# 只有标题\n\n" },
+    { title: UNTITLED_NOTE_TITLE, content: "# 未命名笔记\n\n" },
+    { title: UNTITLED_NOTE_TITLE, content: "# \n\n只有正文" },
+    { title: UNTITLED_NOTE_TITLE, content: "![图片](/uploads/image.png)" },
+    { title: UNTITLED_NOTE_TITLE, content: "---\ntitle: 元数据标题\n---\n" },
+    { title: UNTITLED_NOTE_TITLE, content: "---\ninvalid: [\n---\n" },
+  ]) assert.equal(isEmptyNewNoteDraft(document), false, document.content);
+});
+
+test("structural saves omit only empty new drafts while preserving existing notes and nested content", () => {
+  const document = (id: string, content: string) => ({ id, title: UNTITLED_NOTE_TITLE, content, updatedAt: "", revision: 0 });
+  const records: NotebookRecord[] = [{
+    id: "test", title: "Test", description: "", accent: "#5b4cf0",
+    folders: [{ id: "notes", title: "笔记", open: true,
+      docs: [document("saved-empty", ""), document("empty-new", "# \n\n"), document("body-new", "实际内容")],
+      children: [{ id: "nested", title: "Nested", open: true,
+        docs: [document("cleared-new", "# \n\n"), { ...document("title-new", ""), title: "有标题" }], children: [] }],
+    }],
+  }];
+  const outgoing = notebooksWithSavableDrafts(records, new Set(["empty-new", "body-new", "cleared-new", "title-new"]));
+  assert.deepEqual(documentsInNotebook(outgoing[0]).map(({ document }) => document.id), ["saved-empty", "body-new", "title-new"]);
+  assert.equal(documentsInNotebook(records[0]).length, 5);
+  assert.deepEqual(notebooksWithSavableDrafts(records, new Set()), records);
+});
+
+test("background refresh preserves local drafts and accepts server changes without reviving deleted saved notes", () => {
+  const document = (id: string, title: string) => ({ id, title, content: "", updatedAt: "", revision: 0 });
+  const notebook: NotebookRecord = {
+    id: "test", title: "Test", description: "", accent: "#5b4cf0",
+    folders: [{ id: "notes", title: "笔记", open: true,
+      docs: [document("saved", "旧标题"), document("deleted", "已删除的笔记"), document("draft", UNTITLED_NOTE_TITLE)],
+      children: [{ id: "draft-folder", title: "草稿目录", open: true, docs: [document("nested-draft", UNTITLED_NOTE_TITLE)], children: [] }],
+    }],
+  };
+  const saved = [{ ...notebook, folders: [{ ...notebook.folders[0], docs: [document("saved", "服务器标题")], children: [] }] }];
+  const merged = mergeNewNoteDrafts(saved, [notebook], new Set(["draft", "nested-draft"]));
+  assert.deepEqual(documentsInNotebook(merged[0]).map(({ document }) => [document.id, document.title]), [
+    ["saved", "服务器标题"], ["draft", UNTITLED_NOTE_TITLE], ["nested-draft", UNTITLED_NOTE_TITLE],
+  ]);
+  assert.deepEqual(mergeNewNoteDrafts(saved, merged, new Set(["draft", "nested-draft"])), merged);
+  assert.deepEqual(mergeNewNoteDrafts(saved, [notebook], new Set()), saved);
+  const savedDraft = [{ ...saved[0], folders: [{ ...saved[0].folders[0], docs: [...saved[0].folders[0].docs, document("draft", "已保存")], children: [] }] }];
+  assert.equal(documentsInNotebook(mergeNewNoteDrafts(savedDraft, [notebook], new Set(["draft"]))[0]).length, 2);
+});
+
+test("single-note deletion confirms nonempty content while ignoring empty editor scaffolding", () => {
+  for (const content of ["", " \n", "# \n\n", "#\r\n\r\n- "]) {
+    assert.equal(noteDeletionConfirmation([{ title: "空白笔记", content }]), null);
+  }
+  for (const content of ["正文", "# 有标题", "![图片](/uploads/image.png)", "---\ntitle: 元数据标题\n---\n"]) {
+    const message = noteDeletionConfirmation([{ title: "待删除笔记", content }]);
+    assert.match(message ?? "", /待删除笔记/);
+    assert.match(message ?? "", /废纸篓/);
+  }
+});
+
+test("multi-note deletion always confirms, including a selection of empty notes", () => {
+  assert.equal(noteDeletionConfirmation([]), null);
+  assert.match(noteDeletionConfirmation([
+    { title: "未命名笔记", content: "" }, { title: "未命名笔记", content: "" },
+  ]) ?? "", /2 篇笔记/);
+  assert.match(noteDeletionConfirmation([
+    { title: "文档", content: "正文" }, { title: "未命名笔记", content: "" }, { title: "标题", content: "# 标题" },
+  ]) ?? "", /3 篇笔记/);
 });
 
 test("publication server fields preserve legacy targets and optional SSH users", () => {

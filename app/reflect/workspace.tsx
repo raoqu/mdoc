@@ -16,12 +16,10 @@ import {
   ChevronRight,
   Database,
   Eye,
-  FilePlus2,
   Image,
   LayoutTemplate,
   Menu,
   MessageCircleMore,
-  MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
   Pin,
@@ -70,6 +68,7 @@ import {
   type MarkdownTask,
 } from "./markdown";
 import { dailyDatesFromDocuments } from "./month-grid";
+import { isEmptyNewNoteDraft, mergeNewNoteDrafts, notebooksWithSavableDrafts, UNTITLED_NOTE_TITLE } from "./note-drafts";
 import {
   aliasesFromFrontmatter,
   joinFrontmatter,
@@ -98,6 +97,9 @@ import {
   type KnowledgeBaseCatalog,
 } from "./workspace-sidebar";
 import { TasksScreen } from "./tasks-screen";
+import { NotesCollection } from "./notes-collection";
+import { NoteDeletionDialog, useNoteDeletionConfirmation } from "./note-deletion-dialog";
+import { NoteHeaderActions } from "./note-header-actions";
 
 const ReflectEditor = dynamic(
   () => import("./reflect-editor").then((module) => module.ReflectEditor),
@@ -344,6 +346,7 @@ export function ReflectWorkspace() {
   const [conflicts, setConflicts] = useState<Record<string, DocumentRecord>>({});
   const [notice, setNotice] = useState("");
   const [publishing, setPublishing] = useState(false);
+  const { deletionMessage, confirmDeletion, answerDeletion } = useNoteDeletionConfirmation();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteInitialQuery, setPaletteInitialQuery] = useState("");
   const [audioMemoOpen, setAudioMemoOpen] = useState(false);
@@ -361,6 +364,7 @@ export function ReflectWorkspace() {
   const editorRef = useRef<ReflectEditorHandle>(null);
   const structuralDirtyRef = useRef(false);
   const dirtyDocumentIdsRef = useRef(new Set<string>());
+  const newNoteDraftIdsRef = useRef(new Set<string>());
   const settledTitlesRef = useRef(new Map<string, string>());
   const pendingTitlesRef = useRef(new Map<string, string>());
   const renameTimersRef = useRef(new Map<string, number>());
@@ -376,7 +380,9 @@ export function ReflectWorkspace() {
     notebooks[0] ??
     WELCOME_NOTEBOOK;
   const documents = useMemo(
-    () => (notebook ? documentsInNotebook(notebook) : []),
+    () => (notebook ? documentsInNotebook(notebook).filter(
+      ({ document }) => !newNoteDraftIdsRef.current.has(document.id) || !isEmptyNewNoteDraft(document),
+    ) : []),
     [notebook],
   );
 
@@ -392,7 +398,9 @@ export function ReflectWorkspace() {
     const response = await fetch("/api/notebooks");
     if (!response.ok) throw new Error(await response.text());
     const records = (await response.json()) as NotebookRecord[];
-    if (records.length > 0) setNotebooks(records.map(normalizeNotebookMetadata));
+    if (records.length > 0) {
+      setNotebooks((current) => mergeNewNoteDrafts(records.map(normalizeNotebookMetadata), current, newNoteDraftIdsRef.current));
+    }
   }, []);
 
   useEffect(() => {
@@ -416,7 +424,7 @@ export function ReflectWorkspace() {
       })
       .then((records) => {
         if (records.length > 0) {
-          setNotebooks(records.map(normalizeNotebookMetadata));
+          setNotebooks((current) => mergeNewNoteDrafts(records.map(normalizeNotebookMetadata), current, newNoteDraftIdsRef.current));
           setNotebookId(records[0].id);
         }
       })
@@ -656,16 +664,22 @@ export function ReflectWorkspace() {
       if (structuralDirtyRef.current) {
         structuralDirtyRef.current = false;
         dirtyDocumentIdsRef.current.clear();
+        const outgoingNotebooks = notebooksWithSavableDrafts(notebooks, newNoteDraftIdsRef.current);
         const response = await fetch("/api/notebooks", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(notebooks),
+          body: JSON.stringify(outgoingNotebooks),
         });
         if (!response.ok) {
           structuralDirtyRef.current = true;
           throw new Error(await response.text());
         }
         const persisted = (await response.json()) as NotebookRecord[];
+        for (const record of persisted) {
+          for (const { document } of documentsInNotebook(record)) {
+            newNoteDraftIdsRef.current.delete(document.id);
+          }
+        }
         const revisions = new Map(
           persisted.flatMap((record) =>
             documentsInNotebook(record).map(
@@ -842,6 +856,7 @@ export function ReflectWorkspace() {
 
   useEffect(() => {
     for (const { document } of documents) {
+      if (newNoteDraftIdsRef.current.has(document.id)) continue;
       const settled = settledTitlesRef.current.get(document.id);
       if (settled === undefined) {
         settledTitlesRef.current.set(document.id, document.title);
@@ -956,17 +971,30 @@ export function ReflectWorkspace() {
   }, [conflicts, dirty, knowledgeBaseCatalog, knowledgeBaseSwitching, navigate, saving, toast]);
 
   const newNote = useCallback(() => {
+    if (!loaded) {
+      toast("请等待知识库加载完成");
+      return;
+    }
+    const emptyDraft = documentsInNotebook(notebook).find(({ document }) =>
+      newNoteDraftIdsRef.current.has(document.id) && !document.trashed && isEmptyNewNoteDraft(document),
+    );
+    if (emptyDraft) {
+      navigate({ kind: "note", documentId: emptyDraft.document.id });
+      window.setTimeout(() => editorRef.current?.focus(), 0);
+      return;
+    }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const document: DocumentRecord = {
       id,
-      title: "未命名笔记",
+      title: UNTITLED_NOTE_TITLE,
       content: "# \n\n",
       createdAt: now,
       updatedAt: now,
       revision: 0,
     };
-    mutateNotebooks((records) =>
+    newNoteDraftIdsRef.current.add(id);
+    setNotebooks((records) =>
       records.map((candidate) =>
         candidate.id === notebook.id
           ? addDocumentToFolder(candidate, `${candidate.id}-notes`, "笔记", document)
@@ -975,7 +1003,7 @@ export function ReflectWorkspace() {
     );
     navigate({ kind: "note", documentId: id });
     window.setTimeout(() => editorRef.current?.focus(), 0);
-  }, [mutateNotebooks, navigate, notebook.id]);
+  }, [loaded, navigate, notebook, toast]);
 
   const newNotebook = useCallback(() => {
     const id = crypto.randomUUID();
@@ -1053,6 +1081,7 @@ export function ReflectWorkspace() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (deletionMessage) return;
       const modifier = event.metaKey || event.ctrlKey;
       if (modifier && event.key.toLocaleLowerCase() === "s") {
         event.preventDefault();
@@ -1096,7 +1125,7 @@ export function ReflectWorkspace() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigate, newNote, persist, view]);
+  }, [deletionMessage, navigate, newNote, persist, view]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 720px)");
@@ -1164,7 +1193,7 @@ export function ReflectWorkspace() {
     : "";
   const selected = useMemo<DocumentLocation | undefined>(() => {
     if (noteViewDocumentId) {
-      return documents.find(
+      return documentsInNotebook(notebook).find(
         ({ document }) => document.id === noteViewDocumentId,
       );
     }
@@ -1327,6 +1356,20 @@ export function ReflectWorkspace() {
         );
         return;
       }
+      if (newNoteDraftIdsRef.current.has(documentId)) {
+        const draft = documentsInNotebook(notebook).find(({ document }) => document.id === documentId)?.document;
+        if (!draft) return;
+        const updatedDraft = {
+          ...draft,
+          content: markdown,
+          title: titleFromMarkdown(markdown, UNTITLED_NOTE_TITLE),
+          updatedAt: new Date().toISOString(),
+        };
+        const update = (records: NotebookRecord[]) => updateDocument(records, documentId, () => updatedDraft);
+        if (isEmptyNewNoteDraft(updatedDraft)) setNotebooks(update);
+        else mutateNotebooks(update);
+        return;
+      }
       mutateNotebooks(
         (records) =>
           updateDocument(records, documentId, (document) => ({
@@ -1338,28 +1381,37 @@ export function ReflectWorkspace() {
         { documentIds: [documentId], structural: false },
       );
     },
-    [documents, mutateNotebooks, notebook.id],
+    [documents, mutateNotebooks, notebook],
   );
 
   const patchDocument = useCallback(
     (documentId: string, patch: Partial<DocumentRecord>) => {
-      mutateNotebooks(
-        (records) =>
-          updateDocument(records, documentId, (document) => ({
-            ...document,
-            ...patch,
-            content:
-              patch.private === undefined
-                ? document.content
-                : upsertFrontmatter(document.content, {
-                    private: patch.private ? true : undefined,
-                  }),
-            updatedAt: new Date().toISOString(),
-          })),
-        { documentIds: [documentId], structural: false },
-      );
+      const update = (records: NotebookRecord[]) =>
+        updateDocument(records, documentId, (document) => ({
+          ...document,
+          ...patch,
+          content:
+            patch.private === undefined
+              ? document.content
+              : upsertFrontmatter(document.content, {
+                  private: patch.private ? true : undefined,
+                }),
+          updatedAt: new Date().toISOString(),
+        }));
+      if (newNoteDraftIdsRef.current.has(documentId)) {
+        const updatedDraft = documentsInNotebook(update([notebook])[0]).find(({ document }) => document.id === documentId)?.document;
+        if (updatedDraft?.trashed && isEmptyNewNoteDraft(updatedDraft)) {
+          newNoteDraftIdsRef.current.delete(documentId);
+          setNotebooks((records) => removeDocument(records, documentId));
+          return;
+        }
+        if (!updatedDraft || isEmptyNewNoteDraft(updatedDraft)) setNotebooks(update);
+        else mutateNotebooks(update);
+      } else {
+        mutateNotebooks(update, { documentIds: [documentId], structural: false });
+      }
     },
-    [mutateNotebooks],
+    [mutateNotebooks, notebook],
   );
 
   const applyTaskChanges = useCallback(
@@ -1525,14 +1577,14 @@ export function ReflectWorkspace() {
       if (!documentId) {
         return;
       }
-      const current = documents.find(
+      const current = documentsInNotebook(notebook).find(
         ({ document }) => document.id === documentId,
       )?.document;
       if (current) {
         patchDocument(documentId, { pinned: !current.pinned });
       }
     },
-    [documents, patchDocument],
+    [notebook, patchDocument],
   );
 
   const handlePrivateChange = useCallback(
@@ -1545,28 +1597,23 @@ export function ReflectWorkspace() {
     [patchDocument],
   );
 
-  const handlePublishChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const documentId = event.currentTarget.dataset.documentId;
-      const document = documents.find((item) => item.document.id === documentId)?.document;
-      if (document) {
-        changeDocument(document.id, upsertFrontmatter(document.content, { publish: event.currentTarget.checked }));
-      }
+  const changePublicationMarker = useCallback(
+    (document: DocumentRecord, published: boolean) => {
+      changeDocument(document.id, upsertFrontmatter(document.content, { publish: published }));
     },
-    [documents, changeDocument],
+    [changeDocument],
   );
 
-  const handleMoveToTrash = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      const documentId = event.currentTarget.dataset.documentId;
-      if (!documentId) {
-        return;
-      }
+  const moveDocumentToTrash = useCallback(
+    async (documentId: string) => {
+      const document = documentsInNotebook(notebook).find((item) => item.document.id === documentId)?.document;
+      if (!document) return;
+      if (!await confirmDeletion([document])) return;
       patchDocument(documentId, { trashed: true });
       navigate({ kind: "all-notes" });
       toast("笔记已移到废纸篓");
     },
-    [navigate, patchDocument, toast],
+    [confirmDeletion, navigate, notebook, patchDocument, toast],
   );
 
   const handleRestoreFromTrash = useCallback(
@@ -1578,6 +1625,31 @@ export function ReflectWorkspace() {
     },
     [patchDocument],
   );
+
+  const patchNoteRows = useCallback(async (documentIds: readonly string[], patch: { pinned?: boolean; trashed?: boolean }) => {
+    const requested = new Set(documentIds);
+    const targets = documents.filter(({ document }) => requested.has(document.id) && !document.trashed);
+    if (targets.length === 0) return false;
+    if (targets.some(({ document }) => conflicts[document.id])) {
+      toast("请先处理选中笔记的保存冲突");
+      return false;
+    }
+    if (patch.trashed) {
+      if (!await confirmDeletion(targets.map(({ document }) => document))) return false;
+    }
+    const ids = targets.map(({ document }) => document.id);
+    const selected = new Set(ids);
+    const now = new Date().toISOString();
+    mutateNotebooks((records) => records.map((record) => record.id !== notebook.id ? record : {
+      ...record,
+      folders: updateFolders(record.folders, (folder) => ({
+        ...folder,
+        docs: folder.docs.map((document) => selected.has(document.id) ? { ...document, ...patch, updatedAt: now } : document),
+      })),
+    }), { documentIds: ids, structural: ids.some((id) => newNoteDraftIdsRef.current.has(id)) });
+    toast(patch.trashed ? `已将 ${ids.length} 篇笔记移到废纸篓` : `已${patch.pinned ? "固定" : "取消固定"} ${ids.length} 篇笔记`);
+    return true;
+  }, [confirmDeletion, conflicts, documents, mutateNotebooks, notebook.id, toast]);
 
   const handleDeletePermanently = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
@@ -1734,7 +1806,7 @@ export function ReflectWorkspace() {
             </div>
             <div className="header-actions">
               <span className={`save-state ${dirty ? "dirty" : ""}`}>
-                {saving ? "正在保存…" : dirty ? "等待保存" : "已保存"}
+                {saving ? "正在保存…" : dirty ? "等待保存" : newNoteDraftIdsRef.current.has(location.document.id) ? "未保存草稿" : "已保存"}
               </span>
               <button
                 type="button"
@@ -1766,14 +1838,15 @@ export function ReflectWorkspace() {
                   <PanelRightOpen size={18} />
                 )}
               </button>
-              <button
-                type="button"
-                title="复制笔记链接"
-                aria-label="复制笔记链接"
-                onClick={() => void copyDeepLink(location)}
-              >
-                <MoreHorizontal size={18} />
-              </button>
+              <NoteHeaderActions
+                key={location.document.id}
+                published={publishFromFrontmatter(location.document.content)}
+                publishDisabled={Boolean(location.document.private || privateFromFrontmatter(location.document.content))}
+                deleteDisabled={!documentsInNotebook(notebook).some(({ document }) => document.id === location.document.id)}
+                onPublishChange={(published) => changePublicationMarker(location.document, published)}
+                onCopyLink={() => void copyDeepLink(location)}
+                onDelete={() => void moveDocumentToTrash(location.document.id)}
+              />
             </div>
           </header>
           {conflict ? (
@@ -1910,7 +1983,7 @@ export function ReflectWorkspace() {
                 <input type="checkbox" data-document-id={location.document.id}
                   checked={publishFromFrontmatter(location.document.content)}
                   disabled={location.document.private || privateFromFrontmatter(location.document.content)}
-                  onChange={handlePublishChange} />
+                  onChange={(event) => changePublicationMarker(location.document, event.currentTarget.checked)} />
                 <Globe size={15} /> 标记为发布
               </label>
               <label>
@@ -1926,7 +1999,7 @@ export function ReflectWorkspace() {
               <button
                 type="button"
                 data-document-id={location.document.id}
-                onClick={handleMoveToTrash}
+                onClick={() => void moveDocumentToTrash(location.document.id)}
               >
                 <Trash2 size={15} />
                 移到废纸篓
@@ -1939,49 +2012,15 @@ export function ReflectWorkspace() {
   };
 
   const renderAllNotes = (filteredDocuments = documents) => (
-    <section className="collection-screen">
-      <header className="collection-header">
-        <div>
-          <h1>{view.kind === "tag" ? `#${view.tag}` : "全部笔记"}</h1>
-          <p>
-            {filteredDocuments.filter(({ document }) => !document.trashed).length} 篇笔记
-          </p>
-        </div>
-        <button type="button" className="primary-action" onClick={newNote}>
-          <FilePlus2 size={16} /> 新建笔记
-        </button>
-      </header>
-      <div className="notes-table">
-        <div className="notes-row notes-heading">
-          <span>标题</span><span>位置</span><span>更新时间</span>
-        </div>
-        {filteredDocuments
-          .filter(({ document }) => !document.trashed)
-          .sort(
-            (left, right) =>
-              new Date(right.document.updatedAt).getTime() -
-              new Date(left.document.updatedAt).getTime(),
-          )
-          .map(({ document, folder }) => (
-            <button
-              type="button"
-              className="notes-row"
-              key={document.id}
-              onClick={() =>
-                navigate({ kind: "note", documentId: document.id })
-              }
-            >
-              <span>
-                {document.pinned ? <Pin size={13} /> : null}
-                <strong>{document.title}</strong>
-                <small>{excerpt(document.content, "", 100)}</small>
-              </span>
-              <span>{folder.title}</span>
-              <span>{new Date(document.updatedAt).toLocaleDateString("zh-CN")}</span>
-            </button>
-          ))}
-      </div>
-    </section>
+    <NotesCollection
+      key={`${notebook.id}:${view.kind === "tag" ? view.tag : "all"}`}
+      title={view.kind === "tag" ? `#${view.tag}` : "全部笔记"}
+      documents={filteredDocuments}
+      onNewNote={newNote}
+      onOpenDocument={(documentId) => navigate({ kind: "note", documentId })}
+      onPinDocuments={(documentIds, pinned) => { void patchNoteRows(documentIds, { pinned }); }}
+      onTrashDocuments={(documentIds) => patchNoteRows(documentIds, { trashed: true })}
+    />
   );
 
   const renderTasks = () => (
@@ -2407,6 +2446,7 @@ export function ReflectWorkspace() {
         />
       ) : null}
       <div className="workspace-content">{content}</div>
+      <NoteDeletionDialog message={deletionMessage} onAnswer={answerDeletion} />
       {knowledgeBaseCreateOpen ? (
         <div
           className="knowledge-base-create-backdrop"
