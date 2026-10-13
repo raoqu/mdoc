@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type MouseEvent,
 } from "react";
 import {
@@ -27,7 +26,6 @@ import {
   Plug,
   Globe,
   Settings2,
-  Shield,
   Trash2,
   Waypoints,
   type LucideIcon,
@@ -1185,6 +1183,16 @@ export function ReflectWorkspace() {
     }
   }, [toast]);
 
+  const copyBacklink = useCallback(async (location: DocumentLocation) => {
+    const text = `[[${location.document.title}]]`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("已复制反向链接");
+    } catch {
+      toast(text);
+    }
+  }, [toast]);
+
   const dailyViewDate = view.kind === "daily" ? view.date : null;
   const noteViewDocumentId =
     view.kind === "note" ? view.documentId : null;
@@ -1349,6 +1357,7 @@ export function ReflectWorkspace() {
                 content: markdown,
                 createdAt: now,
                 updatedAt: now,
+                private: privateFromFrontmatter(markdown),
                 revision: 0,
               },
             );
@@ -1587,14 +1596,15 @@ export function ReflectWorkspace() {
     [notebook, patchDocument],
   );
 
-  const handlePrivateChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const documentId = event.currentTarget.dataset.documentId;
-      if (documentId) {
-        patchDocument(documentId, { private: event.currentTarget.checked });
+  const changePrivateMarker = useCallback(
+    (document: DocumentRecord, privateNote: boolean) => {
+      if (documentsInNotebook(notebook).some((item) => item.document.id === document.id)) {
+        patchDocument(document.id, { private: privateNote });
+      } else {
+        changeDocument(document.id, upsertFrontmatter(document.content, { private: privateNote ? true : undefined }));
       }
     },
-    [patchDocument],
+    [changeDocument, notebook, patchDocument],
   );
 
   const changePublicationMarker = useCallback(
@@ -1841,10 +1851,13 @@ export function ReflectWorkspace() {
               <NoteHeaderActions
                 key={location.document.id}
                 published={publishFromFrontmatter(location.document.content)}
+                privateNote={Boolean(location.document.private || privateFromFrontmatter(location.document.content))}
                 publishDisabled={Boolean(location.document.private || privateFromFrontmatter(location.document.content))}
                 deleteDisabled={!documentsInNotebook(notebook).some(({ document }) => document.id === location.document.id)}
                 onPublishChange={(published) => changePublicationMarker(location.document, published)}
                 onCopyLink={() => void copyDeepLink(location)}
+                onCopyBacklink={() => void copyBacklink(location)}
+                onPrivateChange={(privateNote) => changePrivateMarker(location.document, privateNote)}
                 onDelete={() => void moveDocumentToTrash(location.document.id)}
               />
             </div>
@@ -1978,33 +1991,6 @@ export function ReflectWorkspace() {
                 ) : null}
               </section>
             ) : null}
-            <section className="note-actions">
-              <label title="只有勾选后才会进入文档站；私密、回收站和草稿文档始终不发布">
-                <input type="checkbox" data-document-id={location.document.id}
-                  checked={publishFromFrontmatter(location.document.content)}
-                  disabled={location.document.private || privateFromFrontmatter(location.document.content)}
-                  onChange={(event) => changePublicationMarker(location.document, event.currentTarget.checked)} />
-                <Globe size={15} /> 标记为发布
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  data-document-id={location.document.id}
-                  checked={location.document.private ?? false}
-                  onChange={handlePrivateChange}
-                />
-                <Shield size={15} />
-                私密笔记
-              </label>
-              <button
-                type="button"
-                data-document-id={location.document.id}
-                onClick={() => void moveDocumentToTrash(location.document.id)}
-              >
-                <Trash2 size={15} />
-                移到废纸篓
-              </button>
-            </section>
           </aside>
         ) : null}
       </div>

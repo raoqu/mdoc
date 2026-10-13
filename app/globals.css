@@ -627,6 +627,8 @@ kbd {
 .note-more-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 50; width: 172px; padding: 6px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: 0 10px 30px rgb(20 16 28 / 16%); }
 .workspace-header .note-more-menu button { display: flex; align-items: center; justify-content: flex-start; width: 100%; height: 34px; gap: 8px; padding: 7px 10px; color: var(--text-secondary); font: 12px var(--font-sans); text-align: left; }
 .workspace-header .note-more-menu button.danger { color: var(--danger); }
+.workspace-header .note-more-menu button[aria-checked="true"] { color: var(--accent); }
+.note-menu-check { margin-left: auto; }
 .workspace-header .note-more-menu button:disabled { opacity: 0.35; cursor: default; }
 .note-more-menu hr { height: 1px; margin: 5px 4px; border: 0; background: var(--border); }
 
@@ -973,21 +975,6 @@ kbd {
 .backlink-card strong { font-size: 11px; }
 .backlink-card small { color: var(--text-muted); font-size: 10px; line-height: 1.45; }
 .empty-copy { color: var(--text-muted); font-size: 11px; line-height: 1.55; }
-
-.note-actions { display: grid; gap: 5px; border-bottom: 0 !important; }
-.note-actions label,
-.note-actions button {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-.note-actions button { color: var(--danger); cursor: pointer; }
-.note-actions input { accent-color: var(--accent); }
 
 .collection-screen {
   height: 100%;

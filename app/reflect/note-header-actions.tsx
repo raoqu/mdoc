@@ -1,18 +1,21 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { Globe, Link, MoreHorizontal, Trash2 } from "lucide-react";
+import { Check, Globe, Link, Link2, MoreHorizontal, Shield, Trash2 } from "lucide-react";
 
 interface NoteHeaderActionsProps {
   published: boolean;
+  privateNote: boolean;
   publishDisabled: boolean;
   deleteDisabled: boolean;
   onPublishChange: (published: boolean) => void;
   onCopyLink: () => void;
+  onCopyBacklink: () => void;
+  onPrivateChange: (privateNote: boolean) => void;
   onDelete: () => void;
 }
 
-export function NoteHeaderActions({ published, publishDisabled, deleteDisabled, onPublishChange, onCopyLink, onDelete }: NoteHeaderActionsProps) {
+export function NoteHeaderActions({ published, privateNote, publishDisabled, deleteDisabled, onPublishChange, onCopyLink, onCopyBacklink, onPrivateChange, onDelete }: NoteHeaderActionsProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -79,6 +82,12 @@ export function NoteHeaderActions({ published, publishDisabled, deleteDisabled, 
         {open ? (
           <div id={menuId} ref={menuRef} className="note-more-menu" role="menu" aria-label="笔记操作" onKeyDown={handleMenuKeyDown}>
             <button type="button" role="menuitem" onClick={() => { closeMenu(); onCopyLink(); }}><Link size={15} />复制链接</button>
+            <button type="button" role="menuitem" onClick={() => { closeMenu(); onCopyBacklink(); }}><Link2 size={15} />复制反向链接</button>
+            <hr />
+            <button type="button" role="menuitemcheckbox" aria-checked={privateNote}
+              onClick={() => { closeMenu(); onPrivateChange(!privateNote); }}>
+              <Shield size={15} />私密笔记{privateNote ? <Check size={15} className="note-menu-check" /> : null}
+            </button>
             <hr />
             <button type="button" role="menuitem" className="danger" disabled={deleteDisabled}
               title={deleteDisabled ? "笔记尚未保存" : "删除（移到废纸篓）"}
