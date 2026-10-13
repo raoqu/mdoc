@@ -1,12 +1,13 @@
 # 墨笺 Mdocman
 
-一个 Go + TypeScript 的本地 Markdown 笔记管理器。使用 SQLite 管理多个笔记本，支持递归多级目录、可拖拽文件树、Markdown 编辑与渲染预览，并可生成类似 Hugo 的纯静态站点。
+一个 Go + TypeScript 的本地 Markdown 笔记管理器。使用 SQLite 管理多个笔记本，支持递归多级目录、可拖拽文件树、Markdown 编辑与渲染预览，并可使用 Hugo 主题将标记为发布的文档生成纯静态站点。
 
 增强 Markdown 能力包括 GFM 表格、图片上传、围栏代码块、KaTeX 数学公式和 Mermaid 图表。可以导入单个 `.md` 文件或整个目录，并按原目录层级导出 ZIP。
 
 ## 开发
 
-需要 Go 1.24+、Node.js 22+、pnpm 11+。
+需要 Go 1.24+、Node.js 22+、pnpm 11+ 和 C/C++ 编译器。项目脚本使用
+`-tags extended` 编译内置 Hugo 的 Sass 与扩展图片处理。
 
 ```bash
 ./dev.sh
@@ -49,7 +50,8 @@ MDOC_SEMANTIC_MODEL_DIR=/path/to/Qdrant-all-MiniLM-L6-v2-onnx ./mdoc
 索引；模型或分块版本变化时会自动重算，也可以手动点击重建按钮。
 
 左侧栏底部显示当前知识库。点击后可切换已有知识库、调整知识库颜色、在 Finder
-中定位或新建知识库；当前选择记录在 `~/.mdoc/workspace.json`，重启后会自动恢复。
+中定位或新建知识库；每项右侧的“发布配置”可设置该知识库的 Server IP、SSH 用户和发布目录。
+当前选择记录在 `~/.mdoc/workspace.json`，重启后会自动恢复。
 
 传入 Markdown 文件或目录时，`dev.sh` 会跳过前端构建和 pnpm，直接通过 Go
 开发运行模式启动预览：
@@ -71,20 +73,11 @@ MDOC_SEMANTIC_MODEL_DIR=/path/to/Qdrant-all-MiniLM-L6-v2-onnx ./mdoc
 无需额外部署前端目录，也不需要在运行机器上安装 Node.js。`dev.sh` 仍使用独立的
 Vinext 开发服务器和 HMR，不受生产内嵌方式影响。
 
-构建还会生成 `mdocman-site`，它是无数据库依赖的只读发布端，仅托管
-`public-site/`。发布端默认监听 `8090`：
-
-```bash
-SITE_PORT=8090 SITE_DIR=public-site ./dist/bin/mdocman-site
-```
-
-管理端采用内容哈希清单进行 Hugo 风格的增量生成，只重建内容或目录导航发生变化的页面。远程增量部署可使用：
-
-```bash
-DEPLOY_TARGET=user@host:/var/www/notes ./deploy.sh
-```
-
-管理界面的“发布含目录”开关决定静态页面是否生成左侧目录栏。
+构建还会生成 `mdocman-site`，它是无数据库依赖的只读发布端。文档站默认通过
+内置 Hugo Extended 源码引擎 + Stack v3.31.0 构建，由远端 Caddy 托管。Hugo 运行时源码位于 `third_party/hugo/`，编译进 `mdoc`，无需另装 Hugo。
+发布主题单独安装；只有
+frontmatter 标记为 `publish: true` 且非私密、非回收站、非草稿的文档进入站点。
+完整流程见 [文档发布与 Hugo 主题](docs/文档发布.md)。
 
 首次使用固定数据目录时，如果 `~/.mdoc/mdocman.db` 尚不存在，程序会从启动目录
 下旧版 `data/mdocman.db` 创建一致的 SQLite 快照，并复制旧附件、音频和
@@ -121,10 +114,16 @@ Reflect Open 的功能迁移状态参见
 
 ## 静态发布
 
-在界面点击“发布站点”，或运行：
+在笔记右侧勾选“标记为发布”，保存后打开“设置 → 文档发布”，依次安装主题、
+生成预览、发布到服务器。默认目标为 `https://mdoc.raoqu.cc/`。
 
 ```bash
-make static
+./publish.sh theme install
+./publish.sh build
+./deploy.sh
 ```
 
-生成内容位于 `public-site/`，Go 服务可通过 `http://localhost:8080/site/` 预览。
+也可运行 `./mdoc publish help` 查看生产二进制命令。构建结果位于当前知识库的
+`~/.mdoc/publishing/<知识库哈希>/current/public/`，管理端通过 `/site/` 预览。
+每次部署都会重新筛选文档；取消发布后再次部署即可撤下对应页面和附件。
+原 `public-site/` 目录不再作为发布来源。

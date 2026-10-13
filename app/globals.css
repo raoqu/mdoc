@@ -196,6 +196,21 @@ kbd {
   cursor: default;
 }
 
+.sidebar-topline > .sidebar-publish-button.publishing {
+  opacity: 1;
+  color: var(--accent);
+  background: var(--accent-soft);
+  cursor: progress;
+}
+
+.sidebar-publish-spinner {
+  animation: sidebar-publish-spin 0.8s linear infinite;
+}
+
+@keyframes sidebar-publish-spin {
+  to { transform: rotate(360deg); }
+}
+
 .sidebar-topline-spacer {
   min-width: 0;
   flex: 1;
@@ -529,6 +544,27 @@ kbd {
   height: 1px;
   margin: 5px 0;
   background: var(--border);
+}
+
+.knowledge-base-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.knowledge-base-menu-row > button:first-child {
+  flex: 1;
+}
+
+.knowledge-base-menu .knowledge-base-publication-button {
+  width: auto;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.knowledge-base-menu button:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .knowledge-base-color-control {
@@ -2222,3 +2258,14 @@ kbd {
     transition-duration: 0.01ms !important;
   }
 }
+
+.publication-settings fieldset { border: 1px solid var(--border); border-radius: 10px; margin: 22px 0; padding: 18px; }
+.publication-settings legend { padding: 0 6px; font-weight: 600; }
+.publication-settings fieldset > label { display: grid; gap: 7px; font-size: 13px; margin-bottom: 14px; }
+.publication-settings input:not([type="checkbox"]) { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: inherit; }
+.publication-settings fieldset > .publication-checkbox { display: flex; align-items: center; }
+.publication-settings button, .publication-actions a { display: inline-flex; align-items: center; gap: 6px; }
+.publication-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+.publication-theme-state { margin-left: 12px; font-size: 12px; color: var(--text-muted); }
+.publication-documents { padding-left: 20px; line-height: 1.8; max-height: 260px; overflow: auto; }
+.publication-log { padding: 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }

@@ -67,7 +67,8 @@ export default defineConfig(async () => {
       proxy: {
         "/api": {
           target: apiTarget,
-          changeOrigin: true,
+          // Preserve browser Host for publication same-origin validation.
+          changeOrigin: false,
         },
         "/_mdoc": {
           target: apiTarget,

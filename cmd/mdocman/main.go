@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -54,12 +53,13 @@ type Notebook struct {
 	Folders     []Folder `json:"folders"`
 }
 type server struct {
-	db           *sql.DB
-	databases    *databaseManager
-	dataDir      string
-	md           goldmark.Markdown
-	semanticOnce sync.Once
-	semantic     *semanticService
+	db            *sql.DB
+	databases     *databaseManager
+	dataDir       string
+	md            goldmark.Markdown
+	semanticOnce  sync.Once
+	semantic      *semanticService
+	publicationMu sync.RWMutex
 }
 
 func openDBAt(databasePath string) (*sql.DB, error) {
@@ -920,10 +920,6 @@ func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 	writePreviewPage(w, title, s.render(markdownBody(content)))
 }
 
-type buildManifest struct {
-	Sidebar bool              `json:"sidebar"`
-	Files   map[string]string `json:"files"`
-}
 type siteLink struct{ Title, URL string }
 
 func randomToken() (string, error) {
@@ -990,89 +986,12 @@ func (s *server) share(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, e.Error(), 500)
 		return
 	}
-	jsonOut(w, map[string]any{"ok": true, "id": token, "url": "/s/" + token + "/", "previewUrl": "/site/s/" + token + "/"})
+	jsonOut(w, map[string]any{"ok": true, "id": token, "url": "/s/" + token + "/", "previewUrl": "/s/" + token + "/"})
 }
 
+// Keep the historical build endpoint, with the same opt-in publication policy.
 func (s *server) build(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	books, e := s.load()
-	if e != nil {
-		http.Error(w, e.Error(), 500)
-		return
-	}
-	os.MkdirAll("public-site", 0755)
-	os.WriteFile("public-site/style.css", []byte(css), 0644)
-	options := struct {
-		IncludeSidebar *bool `json:"includeSidebar"`
-	}{}
-	_ = json.NewDecoder(r.Body).Decode(&options)
-	includeSidebar := true
-	if options.IncludeSidebar != nil {
-		includeSidebar = *options.IncludeSidebar
-	}
-	old := buildManifest{Files: map[string]string{}}
-	if b, err := os.ReadFile("public-site/.mdocman-manifest.json"); err == nil {
-		json.Unmarshal(b, &old)
-	}
-	next := buildManifest{Sidebar: includeSidebar, Files: map[string]string{}}
-	t := template.Must(template.New("p").Parse(page))
-	links := []siteLink{}
-	for _, b := range books {
-		walkFolders(b.Folders, "", func(_ string, d Doc) {
-			links = append(links, siteLink{d.Title, "/" + slug(b.ID) + "/" + slug(d.ID) + "/"})
-		})
-	}
-	sort.Slice(links, func(i, j int) bool { return links[i].Title < links[j].Title })
-	navJSON, _ := json.Marshal(links)
-	navHash := fmt.Sprintf("%x", sha256.Sum256(navJSON))
-	changed := 0
-	for _, b := range books {
-		walkFolders(b.Folders, "", func(_ string, d Doc) {
-			rel := filepath.Join(slug(b.ID), slug(d.ID), "index.html")
-			sum := fmt.Sprintf("%x", sha256.Sum256([]byte(d.Title+d.Content+fmt.Sprint(includeSidebar)+navHash)))
-			next.Files[rel] = sum
-			if old.Files[rel] == sum {
-				return
-			}
-			dir := filepath.Dir(filepath.Join("public-site", rel))
-			os.MkdirAll(dir, 0755)
-			f, _ := os.Create(filepath.Join("public-site", rel))
-			current := "/" + slug(b.ID) + "/" + slug(d.ID) + "/"
-			t.Execute(f, map[string]any{"Title": d.Title, "Book": b.Title, "HTML": s.render(d.Content), "Date": time.Now().Format("2006-01-02"), "Sidebar": includeSidebar, "Links": links, "Current": current})
-			f.Close()
-			changed++
-		})
-	}
-	removed := 0
-	for rel := range old.Files {
-		if _, ok := next.Files[rel]; !ok {
-			os.RemoveAll(filepath.Dir(filepath.Join("public-site", rel)))
-			removed++
-		}
-	}
-	var idx strings.Builder
-	idx.WriteString(`<!doctype html><link rel="stylesheet" href="/style.css"><main><h1>我的笔记</h1><ul>`)
-	for _, l := range links {
-		fmt.Fprintf(&idx, `<li><a href="%s">%s</a></li>`, l.URL, template.HTMLEscapeString(l.Title))
-	}
-	idx.WriteString(`</ul></main>`)
-	os.WriteFile("public-site/index.html", []byte(idx.String()), 0644)
-	if b, e := os.ReadDir(s.uploadsDir()); e == nil {
-		os.MkdirAll("public-site/uploads", 0755)
-		for _, x := range b {
-			src, _ := os.Open(filepath.Join(s.uploadsDir(), x.Name()))
-			dst, _ := os.Create(filepath.Join("public-site/uploads", x.Name()))
-			io.Copy(dst, src)
-			src.Close()
-			dst.Close()
-		}
-	}
-	manifest, _ := json.MarshalIndent(next, "", "  ")
-	os.WriteFile("public-site/.mdocman-manifest.json", manifest, 0644)
-	jsonOut(w, map[string]any{"ok": true, "output": "public-site", "changed": changed, "removed": removed, "sidebar": includeSidebar})
+	s.publicationAction(w, r, "build")
 }
 
 func migrateJSON(s *server) {
@@ -1112,6 +1031,12 @@ func main() {
 	defer databases.close()
 	s := &server{databases: databases, dataDir: workspaceDir, md: md}
 	migrateJSON(s)
+	if len(os.Args) > 1 && os.Args[1] == "publish" {
+		if err := runPublicationCLI(s, os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if cliRequested(s) {
 		return
 	}
@@ -1149,11 +1074,13 @@ func main() {
 	http.HandleFunc("/api/upload", cors(s.upload))
 	http.HandleFunc("/api/import", cors(s.importMD))
 	http.HandleFunc("/api/export", cors(s.exportMD))
-	http.HandleFunc("/api/build", cors(s.build))
+	http.HandleFunc("/api/build", s.build)
+	http.HandleFunc("/api/publication", s.publicationSettings)
+	http.HandleFunc("/api/publication/", s.publicationActions)
 	http.HandleFunc("/api/share", cors(s.share))
 	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.uploadsDir()))))
 	http.Handle("/audio/", http.StripPrefix("/audio/", http.FileServer(http.Dir(s.audioMemosDir()))))
-	http.Handle("/site/", http.StripPrefix("/site/", http.FileServer(http.Dir("public-site"))))
+	http.HandleFunc("/site/", s.publicationPreview)
 	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
 	http.Handle("/", embeddedFrontendHandler())
 	fmt.Printf("Mdocman API: http://localhost:%s\n知识库目录: %s\n当前知识库: %s\n", port, workspaceDir, knowledgeBaseLabel(databases.activeName()))

@@ -57,7 +57,7 @@ func pathPreviewArgument(args []string) (string, bool) {
 		return "", false
 	}
 	switch args[0] {
-	case "serve", "today", "search", "show", "path", "help":
+	case "serve", "today", "search", "show", "path", "help", "publish":
 		return "", false
 	default:
 		return args[0], true

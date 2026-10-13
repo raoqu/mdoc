@@ -40,6 +40,7 @@ export type SettingsSection =
   | "assets"
   | "templates"
   | "capture"
+  | "publish"
   | "sync"
   | "data";
 

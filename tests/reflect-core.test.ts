@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatPublicationTarget, parsePublicationTarget } from "../app/reflect/publication-target";
+import { deployPublication, PublicationSetupError, type PublicationStatus } from "../app/reflect/publication-api";
 import {
   aliasesFromFrontmatter,
   joinFrontmatter,
   privateFromFrontmatter,
+  publishFromFrontmatter,
   splitFrontmatter,
   upsertFrontmatter,
 } from "../app/reflect/frontmatter";
@@ -378,4 +381,95 @@ test("an unopened daily-note draft stays empty until content changes", () => {
     isEmptyDailyNoteDraft("# 修改过的标题\n\n", date),
     false,
   );
+});
+
+test("publication server fields preserve legacy targets and optional SSH users", () => {
+  for (const target of ["root@10.6.0.1:/www/wwwroot/mdoc/", "deploy@docs.example.com:/var/www/docs", "ssh-alias:/srv/sites/notes/", ""]) {
+    assert.equal(formatPublicationTarget(parsePublicationTarget(target)), target);
+  }
+  assert.deepEqual(parsePublicationTarget("root@10.6.0.1:/www/wwwroot/mdoc/"), {
+    serverIP: "10.6.0.1", sshUser: "root", publishDirectory: "/www/wwwroot/mdoc/",
+  });
+  assert.equal(formatPublicationTarget({ serverIP: " 192.0.2.10 ", sshUser: " deploy ", publishDirectory: " /var/www/team/ " }), "deploy@192.0.2.10:/var/www/team/");
+  assert.equal(formatPublicationTarget({ serverIP: "", sshUser: "root", publishDirectory: "" }), "");
+});
+
+test("publication server fields reject incomplete and combined server addresses", () => {
+  for (const target of [
+    { serverIP: "192.0.2.10", sshUser: "", publishDirectory: "" },
+    { serverIP: "", sshUser: "", publishDirectory: "/var/www/docs/" },
+    { serverIP: "https://192.0.2.10", sshUser: "", publishDirectory: "/var/www/docs/" },
+    { serverIP: "root@192.0.2.10", sshUser: "", publishDirectory: "/var/www/docs/" },
+    { serverIP: "192.0.2.10:22", sshUser: "", publishDirectory: "/var/www/docs/" },
+    { serverIP: "192.0.2.10", sshUser: "root@other", publishDirectory: "/var/www/docs/" },
+  ]) assert.throws(() => formatPublicationTarget(target));
+});
+
+test("publication marker requires a YAML boolean and supports revocation", () => {
+  assert.equal(publishFromFrontmatter("# Note\npublish: true"), false);
+  assert.equal(publishFromFrontmatter("---\npublish: 'true'\n---\nNote"), false);
+  assert.equal(publishFromFrontmatter("---\npublish: true\ninvalid: [\n---\nNote"), false);
+  const selected = upsertFrontmatter("# Note\n", { publish: true });
+  assert.equal(publishFromFrontmatter(selected), true);
+  assert.equal(publishFromFrontmatter(upsertFrontmatter(selected, { publish: false })), false);
+});
+
+function publicationStatusFixture(): PublicationStatus {
+  return {
+    config: {
+      title: "Test", baseURL: "https://docs.example.test/", subtitle: "",
+      themeModule: "example.test/theme", themeVersion: "v1.0.0", includeTOC: true,
+      deployTarget: "deploy@192.0.2.10:/var/www/notes/",
+    },
+    directory: "/workspace/publishing/first", documents: [], themeInstalled: true, previewURL: "/site/",
+  };
+}
+
+test("quick publication uses saved settings and pins the deployment to their knowledge base", async (t) => {
+  const status = publicationStatusFixture();
+  const requests: { url: string; init?: RequestInit }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+    requests.push({ url, init });
+    return Response.json(url === "/api/publication" ? status : { documents: 3, log: "Published" });
+  });
+  const deployment = await deployPublication();
+  assert.equal(deployment.result.documents, 3);
+  assert.deepEqual(requests.map((request) => [request.url, request.init?.method ?? "GET"]), [
+    ["/api/publication", "GET"], ["/api/publication/deploy", "POST"],
+  ]);
+  assert.equal(new Headers(requests[1].init?.headers).get("X-Mdoc-Publication-Directory"), status.directory);
+});
+
+test("settings publication saves the edited target before deployment", async (t) => {
+  const status = publicationStatusFixture();
+  status.config.deployTarget = "deploy@192.0.2.20:/var/www/other/";
+  const requests: RequestInit[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    requests.push(init);
+    return Response.json(url === "/api/publication" ? status : { documents: 1, log: "Published" });
+  });
+  await deployPublication({ directory: status.directory, config: status.config });
+  assert.equal(requests[0].method, "PUT");
+  assert.equal(JSON.parse(String(requests[0].body)).deployTarget, status.config.deployTarget);
+  assert.equal(new Headers(requests[0].headers).get("X-Mdoc-Publication-Directory"), status.directory);
+  assert.equal(requests[1].method, "POST");
+});
+
+test("missing publication prerequisites prevent deployment", async (t) => {
+  const status = publicationStatusFixture();
+  const request = t.mock.method(globalThis, "fetch", async () => Response.json(status));
+  status.config.deployTarget = "";
+  await assert.rejects(deployPublication(), PublicationSetupError);
+  status.config.deployTarget = "deploy@192.0.2.10:/var/www/notes/";
+  status.themeInstalled = false;
+  await assert.rejects(deployPublication(), PublicationSetupError);
+  assert.equal(request.mock.calls.length, 2);
+});
+
+test("publication failures propagate the server reason for the completion notice", async (t) => {
+  const status = publicationStatusFixture();
+  t.mock.method(globalThis, "fetch", async (url: string) => url === "/api/publication"
+    ? Response.json(status)
+    : new Response("SSH connection failed\n", { status: 500 }));
+  await assert.rejects(deployPublication(), /SSH connection failed/);
 });

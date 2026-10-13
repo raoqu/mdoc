@@ -115,3 +115,7 @@ export function privateFromFrontmatter(source: string): boolean {
   return parseFrontmatter(splitFrontmatter(source).raw).data.private === true;
 }
 
+
+export function publishFromFrontmatter(source: string): boolean {
+  return parseFrontmatter(splitFrontmatter(source).raw).data.publish === true;
+}

@@ -27,6 +27,7 @@ import {
   Pin,
   PinOff,
   Plug,
+  Globe,
   Settings2,
   Shield,
   Trash2,
@@ -38,6 +39,12 @@ import { AiSettings } from "./ai-settings";
 import { AudioMemoPanel } from "./audio-memo";
 import type { AiProviderConfig } from "./ai";
 import { ChatScreen } from "./chat-screen";
+import { PublicationSettings } from "./publication-settings";
+import {
+  deployPublication,
+  PublicationSetupError,
+  type PublicationDeployInput,
+} from "./publication-api";
 import { CaptureSettings } from "./capture-settings";
 import { TemplateSettings } from "./template-settings";
 import { SyncSettings, type SyncConfig } from "./sync-settings";
@@ -67,6 +74,7 @@ import {
   aliasesFromFrontmatter,
   joinFrontmatter,
   privateFromFrontmatter,
+  publishFromFrontmatter,
   splitFrontmatter,
   upsertFrontmatter,
 } from "./frontmatter";
@@ -160,6 +168,7 @@ const SETTINGS_NAV_GROUPS: readonly {
       { id: "templates", label: "模板", icon: LayoutTemplate },
       { id: "capture", label: "网页剪藏", icon: Plug },
       { id: "sync", label: "同步", icon: Waypoints },
+      { id: "publish", label: "文档发布", icon: Globe },
       { id: "data", label: "数据", icon: Database },
     ],
   },
@@ -203,6 +212,11 @@ const SETTINGS_PAGE_COPY: Record<
     group: "工作空间",
     title: "同步",
     description: "配置知识库的 Git 备份、自动同步和冲突处理。",
+  },
+  publish: {
+    group: "工作空间",
+    title: "文档发布",
+    description: "将当前知识库中标记为发布的文档生成 Hugo 站点，并部署到服务器。",
   },
   data: {
     group: "工作空间",
@@ -329,6 +343,7 @@ export function ReflectWorkspace() {
   const [saving, setSaving] = useState(false);
   const [conflicts, setConflicts] = useState<Record<string, DocumentRecord>>({});
   const [notice, setNotice] = useState("");
+  const [publishing, setPublishing] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteInitialQuery, setPaletteInitialQuery] = useState("");
   const [audioMemoOpen, setAudioMemoOpen] = useState(false);
@@ -352,6 +367,8 @@ export function ReflectWorkspace() {
   const syncTimerRef = useRef(0);
   const assetDescribeTimerRef = useRef(0);
   const launchActionHandledRef = useRef(false);
+  const publishingRef = useRef(false);
+  const toastTimerRef = useRef(0);
 
   const view = history[historyIndex] ?? history[0];
   const notebook =
@@ -364,9 +381,12 @@ export function ReflectWorkspace() {
   );
 
   const toast = useCallback((message: string) => {
+    window.clearTimeout(toastTimerRef.current);
     setNotice(message);
-    window.setTimeout(() => setNotice(""), 2600);
+    toastTimerRef.current = window.setTimeout(() => setNotice(""), 4000);
   }, []);
+
+  useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
 
   const refreshNotebooks = useCallback(async () => {
     const response = await fetch("/api/notebooks");
@@ -405,15 +425,15 @@ export function ReflectWorkspace() {
   }, [toast]);
 
   const switchKnowledgeBase = useCallback(
-    async (knowledgeBaseName: string) => {
+    async (knowledgeBaseName: string, openPublication = false) => {
       if (
         knowledgeBaseName === knowledgeBaseCatalog?.active ||
-        knowledgeBaseSwitching
+        knowledgeBaseSwitching || publishingRef.current
       ) {
         return;
       }
-      if (dirty || saving) {
-        toast("笔记正在保存，请稍后再切换知识库");
+      if (dirty || saving || Object.keys(conflicts).length > 0) {
+        toast(dirty || saving ? "笔记正在保存，请稍后再切换知识库" : "请先处理笔记保存冲突，再切换知识库");
         return;
       }
       setKnowledgeBaseSwitching(true);
@@ -424,7 +444,11 @@ export function ReflectWorkspace() {
           body: JSON.stringify({ name: knowledgeBaseName }),
         });
         if (!response.ok) throw new Error(await response.text());
-        window.location.reload();
+        if (openPublication) {
+          window.location.assign(`${window.location.pathname}?view=publish`);
+        } else {
+          window.location.reload();
+        }
       } catch (error) {
         setKnowledgeBaseSwitching(false);
         toast(
@@ -435,6 +459,7 @@ export function ReflectWorkspace() {
       }
     },
     [
+      conflicts,
       dirty,
       knowledgeBaseCatalog?.active,
       knowledgeBaseSwitching,
@@ -444,7 +469,7 @@ export function ReflectWorkspace() {
   );
 
   const createKnowledgeBase = useCallback(async (name: string) => {
-    if (knowledgeBaseSwitching) return;
+    if (knowledgeBaseSwitching || publishingRef.current) return;
     if (dirty || saving) {
       toast("笔记正在保存，请稍后再新建知识库");
       return;
@@ -904,6 +929,32 @@ export function ReflectWorkspace() {
     [historyIndex, view],
   );
 
+  const publishKnowledgeBase = useCallback(async (input?: PublicationDeployInput) => {
+    if (publishingRef.current) throw new Error("发布任务正在运行，请稍后重试");
+    if (dirty || saving || Object.keys(conflicts).length > 0) {
+      throw new Error("请等待笔记保存完成，并先处理保存冲突");
+    }
+    if (!knowledgeBaseCatalog || knowledgeBaseSwitching) {
+      throw new Error("请等待知识库加载或切换完成");
+    }
+    publishingRef.current = true;
+    setPublishing(true);
+    const label = knowledgeBaseCatalog.knowledgeBases.find((item) => item.name === knowledgeBaseCatalog.active)?.label ?? "当前知识库";
+    try {
+      const deployment = await deployPublication(input);
+      toast(`${label}发布完成，已发布 ${deployment.result.documents} 篇文档`);
+      return deployment;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast(`发布失败：${message.split("\n")[0].slice(0, 160)}`);
+      if (error instanceof PublicationSetupError) navigate({ kind: "settings", section: "publish" });
+      throw error;
+    } finally {
+      publishingRef.current = false;
+      setPublishing(false);
+    }
+  }, [conflicts, dirty, knowledgeBaseCatalog, knowledgeBaseSwitching, navigate, saving, toast]);
+
   const newNote = useCallback(() => {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -1066,6 +1117,7 @@ export function ReflectWorkspace() {
       }
     }
     else if (requestedView === "tasks") navigate({ kind: "tasks" });
+    else if (requestedView === "publish") navigate({ kind: "settings", section: "publish" });
     else if (requestedView === "search") {
       setPaletteInitialQuery(params.get("q") ?? "");
       setPaletteOpen(true);
@@ -1493,6 +1545,17 @@ export function ReflectWorkspace() {
     [patchDocument],
   );
 
+  const handlePublishChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const documentId = event.currentTarget.dataset.documentId;
+      const document = documents.find((item) => item.document.id === documentId)?.document;
+      if (document) {
+        changeDocument(document.id, upsertFrontmatter(document.content, { publish: event.currentTarget.checked }));
+      }
+    },
+    [documents, changeDocument],
+  );
+
   const handleMoveToTrash = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       const documentId = event.currentTarget.dataset.documentId;
@@ -1843,6 +1906,13 @@ export function ReflectWorkspace() {
               </section>
             ) : null}
             <section className="note-actions">
+              <label title="只有勾选后才会进入文档站；私密、回收站和草稿文档始终不发布">
+                <input type="checkbox" data-document-id={location.document.id}
+                  checked={publishFromFrontmatter(location.document.content)}
+                  disabled={location.document.private || privateFromFrontmatter(location.document.content)}
+                  onChange={handlePublishChange} />
+                <Globe size={15} /> 标记为发布
+              </label>
               <label>
                 <input
                   type="checkbox"
@@ -2174,6 +2244,13 @@ export function ReflectWorkspace() {
             />
           ) : null}
 
+          {activeSection === "publish" ? (
+            <PublicationSettings key={knowledgeBaseCatalog?.active ?? "default"}
+              knowledgeBaseLabel={knowledgeBaseCatalog?.knowledgeBases.find((item) => item.name === knowledgeBaseCatalog.active)?.label ?? "当前知识库"}
+              publishing={publishing} onPublish={publishKnowledgeBase}
+              pendingSave={dirty || saving || Object.keys(conflicts).length > 0} onNotice={toast} />
+          ) : null}
+
           {activeSection === "data" ? (
             <section>
               <h2>笔记空间与导出</h2>
@@ -2282,7 +2359,11 @@ export function ReflectWorkspace() {
           notebook={notebook}
           notebooks={notebooks}
           knowledgeBaseCatalog={knowledgeBaseCatalog}
-          knowledgeBaseSwitching={knowledgeBaseSwitching}
+          knowledgeBaseSwitching={knowledgeBaseSwitching || publishing}
+          publishing={publishing}
+          publishDisabled={!loaded || !knowledgeBaseCatalog || knowledgeBaseSwitching || dirty || saving || Object.keys(conflicts).length > 0}
+          publishDisabledReason={Object.keys(conflicts).length > 0 ? "请先处理笔记保存冲突" : dirty || saving ? "请等待笔记保存完成" : "请等待知识库加载或切换完成"}
+          onPublish={() => void publishKnowledgeBase().catch(() => {})}
           documents={documents}
           view={view}
           onNavigate={navigate}
@@ -2302,10 +2383,18 @@ export function ReflectWorkspace() {
             navigate(first ? { kind: "note", documentId: first.document.id } : { kind: "all-notes" });
           }}
           onKnowledgeBaseChange={(name) => void switchKnowledgeBase(name)}
+          onKnowledgeBasePublication={(name) => {
+            if (name === knowledgeBaseCatalog?.active) {
+              navigate({ kind: "settings", section: "publish" });
+            } else {
+              void switchKnowledgeBase(name, true);
+            }
+          }}
           onKnowledgeBaseColorChange={(color) => {
             void changeKnowledgeBaseColor(color);
           }}
           onKnowledgeBaseCreate={() => {
+            if (publishingRef.current) return;
             if (dirty || saving) {
               toast("笔记正在保存，请稍后再新建知识库");
               return;
@@ -2399,7 +2488,7 @@ export function ReflectWorkspace() {
           onSettings={() => navigate({ kind: "settings" })}
         />
       ) : null}
-      {notice ? <div className="reflect-toast">{notice}</div> : null}
+      {notice ? <div className="reflect-toast" role="status" aria-live="polite">{notice}</div> : null}
       <AudioMemoPanel
         open={audioMemoOpen}
         notebookId={notebook.id}

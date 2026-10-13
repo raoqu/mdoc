@@ -9,7 +9,9 @@ import {
   FilePlus2,
   Files,
   FolderOpen,
+  Globe,
   ListChecks,
+  LoaderCircle,
   LocateFixed,
   MessageCircle,
   Mic,
@@ -43,6 +45,9 @@ interface WorkspaceSidebarProps {
   notebooks: readonly NotebookRecord[];
   knowledgeBaseCatalog: KnowledgeBaseCatalog | null;
   knowledgeBaseSwitching: boolean;
+  publishing: boolean;
+  publishDisabled: boolean;
+  publishDisabledReason: string;
   documents: readonly DocumentLocation[];
   view: WorkspaceView;
   onNavigate: (view: WorkspaceView) => void;
@@ -55,6 +60,8 @@ interface WorkspaceSidebarProps {
   onCollapse: () => void;
   onNotebookChange: (notebookId: string) => void;
   onKnowledgeBaseChange: (knowledgeBaseName: string) => void;
+  onKnowledgeBasePublication: (knowledgeBaseName: string) => void;
+  onPublish: () => void;
   onKnowledgeBaseColorChange: (color: string) => void;
   onKnowledgeBaseCreate: () => void;
   onKnowledgeBaseReveal: () => void;
@@ -81,6 +88,9 @@ export function WorkspaceSidebar({
   notebooks,
   knowledgeBaseCatalog,
   knowledgeBaseSwitching,
+  publishing,
+  publishDisabled,
+  publishDisabledReason,
   documents,
   view,
   onNavigate,
@@ -93,6 +103,8 @@ export function WorkspaceSidebar({
   onCollapse,
   onNotebookChange,
   onKnowledgeBaseChange,
+  onKnowledgeBasePublication,
+  onPublish,
   onKnowledgeBaseColorChange,
   onKnowledgeBaseCreate,
   onKnowledgeBaseReveal,
@@ -141,6 +153,17 @@ export function WorkspaceSidebar({
           aria-label="收起侧栏"
         >
           <PanelLeftClose size={17} />
+        </button>
+        <button
+          type="button"
+          className={`sidebar-publish-button ${publishing ? "publishing" : ""}`}
+          onClick={onPublish}
+          disabled={publishing || publishDisabled}
+          title={publishing ? `正在发布${activeKnowledgeBaseLabel}…` : publishDisabled ? publishDisabledReason : `发布${activeKnowledgeBaseLabel}`}
+          aria-label={publishing ? "正在发布知识库" : "发布当前知识库"}
+          aria-busy={publishing}
+        >
+          {publishing ? <LoaderCircle className="sidebar-publish-spinner" size={17} /> : <Globe size={17} />}
         </button>
         <span className="sidebar-topline-spacer" />
         <button
@@ -328,23 +351,41 @@ export function WorkspaceSidebar({
                   const current =
                     knowledgeBase.name === knowledgeBaseCatalog.active;
                   return (
-                    <button
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={current}
-                      key={knowledgeBase.name}
-                      onClick={() => {
-                        setKnowledgeBaseMenuOpen(false);
-                        if (!current) onKnowledgeBaseChange(knowledgeBase.name);
-                      }}
-                    >
-                      <span
-                        className="knowledge-base-menu-swatch"
-                        style={{ backgroundColor: knowledgeBase.color }}
-                      />
-                      <span>{knowledgeBase.label}</span>
-                      {current ? <Check size={15} /> : null}
-                    </button>
+                    <div className="knowledge-base-menu-row" key={knowledgeBase.name}>
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={current}
+                        disabled={knowledgeBaseSwitching}
+                        onClick={() => {
+                          setKnowledgeBaseMenuOpen(false);
+                          if (!current) onKnowledgeBaseChange(knowledgeBase.name);
+                        }}
+                      >
+                        <span
+                          className="knowledge-base-menu-swatch"
+                          style={{ backgroundColor: knowledgeBase.color }}
+                        />
+                        <span>{knowledgeBase.label}</span>
+                        {current ? <Check size={15} /> : null}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="knowledge-base-publication-button"
+                        aria-label={`${knowledgeBase.label}的发布配置`}
+                        title={current ? "发布配置" : "切换到此知识库并打开发布配置"}
+                        disabled={knowledgeBaseSwitching}
+                        onClick={() => {
+                          setKnowledgeBaseMenuOpen(false);
+                          setColorMenuOpen(false);
+                          onKnowledgeBasePublication(knowledgeBase.name);
+                        }}
+                      >
+                        <Globe size={14} />
+                        <span>发布配置</span>
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -412,6 +453,7 @@ export function WorkspaceSidebar({
               <button
                 type="button"
                 role="menuitem"
+                disabled={knowledgeBaseSwitching}
                 onClick={() => {
                   setKnowledgeBaseMenuOpen(false);
                   onKnowledgeBaseCreate();

@@ -37,8 +37,8 @@ cp "$FRONTEND_INDEX" "$EMBED_DIR/index.html"
 mkdir -p dist/bin
 
 echo "构建内嵌前端的 Go 应用与发布端…"
-go build -trimpath -ldflags="-s -w" -o "$ROOT_DIR/mdoc" ./cmd/mdocman
-go build -trimpath -ldflags="-s -w" -o dist/bin/mdocman-site ./cmd/mdocman-site
+go build -tags extended -trimpath -ldflags="-s -w" -o "$ROOT_DIR/mdoc" ./cmd/mdocman
+go build -tags extended -trimpath -ldflags="-s -w" -o dist/bin/mdocman-site ./cmd/mdocman-site
 
 echo "构建完成："
 echo "  Mdoc 应用（已内嵌前端）：./mdoc"

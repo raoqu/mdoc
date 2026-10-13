@@ -35,7 +35,7 @@ if (( $# > 0 )); then
   # CSS edits without restarting the Go preview process.
   export MDOC_PREVIEW_THEME_DIR="$ROOT_DIR/themes"
   echo "启动 Markdown 开发预览（跳过前端构建）：$1"
-  exec go run ./cmd/mdocman "$1"
+  exec go run -tags extended ./cmd/mdocman "$1"
 fi
 
 command -v pnpm >/dev/null 2>&1 || { echo "错误：未找到 pnpm。" >&2; exit 1; }
@@ -51,7 +51,7 @@ if lsof -tiTCP:"$API_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 echo "启动 Go 后端：http://127.0.0.1:$API_PORT"
-API_PORT="$API_PORT" go run ./cmd/mdocman &
+API_PORT="$API_PORT" go run -tags extended ./cmd/mdocman &
 BACKEND_PID=$!
 
 for _ in {1..40}; do

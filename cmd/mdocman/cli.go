@@ -80,7 +80,7 @@ func runCLI(s *server, args []string, out, errOut io.Writer) bool {
 		_ = title
 		return true
 	case "help", "--help", "-h":
-		fmt.Fprintln(out, "mdoc <路径>")
+		fmt.Fprintln(out, "mdoc <路径>；mdoc publish [config|theme install|build|deploy]")
 		fmt.Fprintln(out, "mdocman [serve|today|search <query>|show <id-or-title>|path <id-or-title>]")
 		return true
 	default:

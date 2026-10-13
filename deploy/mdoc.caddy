@@ -1,0 +1,5 @@
+mdoc.raoqu.cc {
+    root * /www/wwwroot/mdoc
+    encode zstd gzip
+    file_server
+}

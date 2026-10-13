@@ -1,0 +1,9 @@
+{
+  "title": "墨笺文档",
+  "baseURL": "https://mdoc.raoqu.cc/",
+  "subtitle": "公开的笔记与文档",
+  "themeModule": "github.com/CaiJimmy/hugo-theme-stack/v3",
+  "themeVersion": "v3.31.0",
+  "includeTOC": true,
+  "deployTarget": "root@10.6.0.1:/www/wwwroot/mdoc/"
+}
