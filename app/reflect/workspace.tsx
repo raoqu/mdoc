@@ -992,15 +992,15 @@ export function ReflectWorkspace() {
       return;
     }
     previewWindow.opener = null;
-    previewWindow.document.title = "正在生成知识库预览";
-    previewWindow.document.body.textContent = "正在生成知识库预览…";
+    previewWindow.document.title = "正在加载知识库预览";
+    previewWindow.document.body.textContent = "正在加载知识库预览…";
     publicationBusyRef.current = true;
     setPreviewing(true);
     const label = knowledgeBaseCatalog.knowledgeBases.find((item) => item.name === knowledgeBaseCatalog.active)?.label ?? "当前知识库";
     try {
-      const preview = await previewPublication();
-      if (!previewWindow.closed) previewWindow.location.replace(new URL(preview.status.previewURL, window.location.origin).href);
-      toast(`${label}预览已生成，共 ${preview.result.documents} 篇文档`);
+      const preview = await previewPublication(notebook.id);
+      if (!previewWindow.closed) previewWindow.location.replace(new URL(preview.result.previewURL, window.location.origin).href);
+      toast(`${label}预览已打开，共 ${preview.result.documents} 篇文档`);
     } catch (error) {
       previewWindow.close();
       const message = error instanceof Error ? error.message : String(error);
@@ -1010,7 +1010,7 @@ export function ReflectWorkspace() {
       publicationBusyRef.current = false;
       setPreviewing(false);
     }
-  }, [conflicts, dirty, knowledgeBaseCatalog, knowledgeBaseSwitching, navigate, saving, toast]);
+  }, [conflicts, dirty, knowledgeBaseCatalog, knowledgeBaseSwitching, navigate, notebook.id, saving, toast]);
 
   const newNote = useCallback(() => {
     if (!loaded) {

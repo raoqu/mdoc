@@ -209,7 +209,7 @@ func (s *server) renderHugoPreview(ctx context.Context, config publicationConfig
 		return nil, err
 	}
 	if data.CurrentURL != "" {
-		html = rewritePreviewLinks(html, key, data.CurrentURL)
+		html = rewritePreviewLinks(html, key, data.CurrentURL, data.HomeURL)
 	}
 	assets := map[string][]byte{}
 	err = filepath.WalkDir(destination, func(filename string, entry fs.DirEntry, err error) error {
@@ -281,7 +281,10 @@ func writeHugoPreview(w http.ResponseWriter, r *http.Request, s *server, config 
 
 // Theme-generated home/title links must navigate the original preview server,
 // while CSS and compiled resources retain their isolated Hugo asset prefix.
-func rewritePreviewLinks(document []byte, key, current string) []byte {
+func rewritePreviewLinks(document []byte, key, current, home string) []byte {
+	if home == "" {
+		home = "/"
+	}
 	prefix := previewAssetsPrefix + "render/" + key + "/"
 	tokens := xhtml.NewTokenizer(bytes.NewReader(document))
 	var out bytes.Buffer
@@ -306,7 +309,7 @@ func rewritePreviewLinks(document []byte, key, current string) []byte {
 					var target string
 					switch address.Path {
 					case strings.TrimSuffix(prefix, "/"), prefix:
-						target = "/"
+						target = home
 					case prefix + "post/mdoc-preview/":
 						target = current
 					}

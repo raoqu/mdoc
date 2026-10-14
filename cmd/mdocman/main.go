@@ -1117,6 +1117,8 @@ func main() {
 	http.HandleFunc("/api/sync/run", cors(s.syncRun))
 	http.HandleFunc("/api/assets/describe", cors(s.describeAssets))
 	http.HandleFunc("/api/preview/", cors(s.previewDocument))
+	http.HandleFunc(knowledgePreviewPrefix, cors(s.knowledgePreview))
+	http.HandleFunc(knowledgePreviewPrefix+"/", cors(s.knowledgePreview))
 	http.HandleFunc(previewAssetsPrefix, servePreviewAsset)
 	http.HandleFunc("/api/upload", cors(s.upload))
 	http.HandleFunc("/api/import", cors(s.importMD))

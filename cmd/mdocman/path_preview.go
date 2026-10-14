@@ -213,6 +213,7 @@ type pathPreviewPageData struct {
 	Markdown     string
 	PreviewInput map[string]string
 	CurrentURL   string
+	HomeURL      string
 	ShowTree     bool
 	Directory    bool
 	Entries      []pathPreviewEntry

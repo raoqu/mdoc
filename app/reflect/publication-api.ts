@@ -36,7 +36,7 @@ export interface PublicationDeployment {
 
 export interface PublicationPreview {
   status: PublicationStatus;
-  result: PublicationResult;
+  result: PublicationResult & { previewURL: string };
 }
 
 export class PublicationSetupError extends Error {}
@@ -65,14 +65,15 @@ export async function deployPublication(input?: PublicationDeployInput): Promise
   return { status, result };
 }
 
-export async function previewPublication(): Promise<PublicationPreview> {
+export async function previewPublication(notebookId: string): Promise<PublicationPreview> {
   const status = await publicationResponseJSON<PublicationStatus>(await fetch("/api/publication"));
   if (!status.themeInstalled) {
     throw new PublicationSetupError("请先在发布配置中安装所选主题");
   }
-  const result = await publicationResponseJSON<PublicationResult>(await fetch("/api/publication/build", {
+  const result = await publicationResponseJSON<PublicationPreview["result"]>(await fetch("/api/knowledge-preview", {
     method: "POST",
-    headers: { "X-Mdoc-Publication-Directory": status.directory },
+    headers: { "Content-Type": "application/json", "X-Mdoc-Publication-Directory": status.directory },
+    body: JSON.stringify({ notebookId }),
   }));
   return { status, result };
 }

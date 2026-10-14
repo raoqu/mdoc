@@ -516,34 +516,35 @@ test("quick publication uses saved settings and pins the deployment to their kno
   assert.equal(new Headers(requests[1].init?.headers).get("X-Mdoc-Publication-Directory"), status.directory);
 });
 
-test("knowledge base preview builds without a deployment target and pins its knowledge base", async (t) => {
+test("knowledge preview opens the saved notebook tree independently of publication output", async (t) => {
   const status = publicationStatusFixture();
   status.config.deployTarget = "";
   const requests: { url: string; init?: RequestInit }[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     requests.push({ url, init });
-    return Response.json(url === "/api/publication" ? status : { documents: 4, log: "Preview built" });
+    return Response.json(url === "/api/publication" ? status : { documents: 4, log: "Tree loaded", previewURL: "/api/knowledge-preview/welcome?notebookId=active-notebook" });
   });
-  const preview = await previewPublication();
+  const preview = await previewPublication("active-notebook");
   assert.equal(preview.result.documents, 4);
-  assert.equal(preview.status.previewURL, "/site/");
+  assert.equal(preview.result.previewURL, "/api/knowledge-preview/welcome?notebookId=active-notebook");
   assert.deepEqual(requests.map((request) => [request.url, request.init?.method ?? "GET"]), [
-    ["/api/publication", "GET"], ["/api/publication/build", "POST"],
+    ["/api/publication", "GET"], ["/api/knowledge-preview", "POST"],
   ]);
   assert.equal(new Headers(requests[1].init?.headers).get("X-Mdoc-Publication-Directory"), status.directory);
+  assert.deepEqual(JSON.parse(String(requests[1].init?.body)), { notebookId: "active-notebook" });
 });
 
 test("knowledge base preview reports missing themes and build failures", async (t) => {
   const status = publicationStatusFixture();
   status.themeInstalled = false;
   const request = t.mock.method(globalThis, "fetch", async () => Response.json(status));
-  await assert.rejects(previewPublication(), PublicationSetupError);
+  await assert.rejects(previewPublication("active-notebook"), PublicationSetupError);
   assert.equal(request.mock.calls.length, 1);
   status.themeInstalled = true;
   request.mock.mockImplementation(async (url: string) => url === "/api/publication"
     ? Response.json(status)
     : new Response("Knowledge base switched\n", { status: 409 }));
-  await assert.rejects(previewPublication(), /Knowledge base switched/);
+  await assert.rejects(previewPublication("active-notebook"), /Knowledge base switched/);
 });
 
 test("settings publication saves the edited target before deployment", async (t) => {

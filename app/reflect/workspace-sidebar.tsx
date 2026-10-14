@@ -171,7 +171,7 @@ export function WorkspaceSidebar({
           className={`sidebar-publish-button ${publishing ? "publishing" : ""}`}
           onClick={onPublish}
           disabled={publishing || previewing || publishDisabled}
-          title={publishing ? `正在发布${activeKnowledgeBaseLabel}…` : previewing ? "正在生成知识库预览，请稍候" : publishDisabled ? publishDisabledReason : `发布${activeKnowledgeBaseLabel}`}
+          title={publishing ? `正在发布${activeKnowledgeBaseLabel}…` : previewing ? "正在加载知识库预览，请稍候" : publishDisabled ? publishDisabledReason : `发布${activeKnowledgeBaseLabel}`}
           aria-label={publishing ? "正在发布知识库" : "发布当前知识库"}
           aria-busy={publishing}
         >
@@ -182,8 +182,8 @@ export function WorkspaceSidebar({
           className={`sidebar-preview-button ${previewing ? "previewing" : ""}`}
           onClick={onPreview}
           disabled={publishing || previewing || publishDisabled}
-          title={previewing ? `正在生成${activeKnowledgeBaseLabel}预览…` : publishing ? "正在发布知识库，请稍候" : publishDisabled ? publishDisabledReason : `预览${activeKnowledgeBaseLabel}`}
-          aria-label={previewing ? "正在生成知识库预览" : "预览当前知识库"}
+          title={previewing ? `正在加载${activeKnowledgeBaseLabel}预览…` : publishing ? "正在发布知识库，请稍候" : publishDisabled ? publishDisabledReason : `预览${activeKnowledgeBaseLabel}`}
+          aria-label={previewing ? "正在加载知识库预览" : "预览当前知识库"}
           aria-busy={previewing}
         >
           {previewing ? <LoaderCircle className="sidebar-publish-spinner" size={17} /> : <Eye size={17} />}

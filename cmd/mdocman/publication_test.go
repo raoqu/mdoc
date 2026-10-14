@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -249,6 +250,17 @@ func TestPublicationHugoIntegration(t *testing.T) {
 	putChatToolDocument(t, s, "public", "公开示例", "---\npublish: true\ntags: [示例]\n---\nPUBLIC_BODY_SENTINEL\n\n[附件](/uploads/public.txt)\n\n[[other|另一篇]]", false)
 	putChatToolDocument(t, s, "other", "Other", "---\npublish: true\n---\nOTHER_SENTINEL", false)
 	putChatToolDocument(t, s, "secret", "SECRET_TITLE_SENTINEL", "SECRET_BODY_SENTINEL", false)
+	books, err := s.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range books[0].Folders[0].Docs {
+		books[0].Folders[0].Docs[i].Pinned = true
+	}
+	books[0].PinnedTree = []documentTreeNode{{ID: "secret", Children: []documentTreeNode{{ID: "other"}}}, {ID: "public"}}
+	if err = s.save(books); err != nil {
+		t.Fatal(err)
+	}
 	scoped, root, err := s.publicationScope()
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +290,17 @@ func TestPublicationHugoIntegration(t *testing.T) {
 	}
 	if result.Documents != 2 {
 		t.Fatalf("documents = %d", result.Documents)
+	}
+	localPreview := httptest.NewRecorder()
+	scoped.knowledgePreview(localPreview, httptest.NewRequest(http.MethodGet, knowledgePreviewURL("other", "book", filepath.Base(root)), nil))
+	if localPreview.Code != 200 {
+		t.Fatal(localPreview.Body.String())
+	}
+	if got := renderedKnowledgeTree(t, localPreview.Body.String()); !reflect.DeepEqual(got, books[0].PinnedTree) {
+		t.Fatalf("Stack local preview lost saved hierarchy: %+v", got)
+	}
+	if !strings.Contains(localPreview.Body.String(), "OTHER_SENTINEL") {
+		t.Fatal("Stack local preview did not render requested document")
 	}
 	public := readPublicationTree(t, result.Output)
 	preview := readPublicationTree(t, filepath.Join(root, "current", "preview"))

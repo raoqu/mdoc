@@ -72,7 +72,7 @@ func TestThemeDiscoveryInheritanceAndLiveTemplates(t *testing.T) {
 
 func TestPreviewThemeLinksKeepOriginalNavigation(t *testing.T) {
 	html := []byte(`<a href="/_mdoc/render/theme/">Home</a><a href="/_mdoc/render/theme/post/mdoc-preview/#heading">Title</a><link href="/_mdoc/render/theme/style.css"><a href="next.md">Next</a>`)
-	rendered := string(rewritePreviewLinks(html, "theme", "/guide/start.md?theme=stack"))
+	rendered := string(rewritePreviewLinks(html, "theme", "/guide/start.md?theme=stack", ""))
 	for _, expected := range []string{`href="/"`, `href="/guide/start.md?theme=stack#heading"`, `href="/_mdoc/render/theme/style.css"`, `href="next.md"`} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("missing navigation %s: %s", expected, rendered)
