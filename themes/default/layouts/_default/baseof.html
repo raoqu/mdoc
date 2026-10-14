@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN" data-preview-theme="{{ .Site.Params.mdocTheme }}"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{{ .Title }}{{ if .Site.Params.mdocPreview }} · 预览{{ end }}</title>
+<link rel="stylesheet" href="{{ "mdoc/base.css" | relURL }}"><link id="preview-theme-stylesheet" rel="stylesheet" href="{{ "mdoc/style.css" | relURL }}">
+{{ partial "mdoc/tree-head.html" . }}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script><script defer src="{{ "mdoc/math.js" | relURL }}"></script>
+<script type="module" src="{{ "mdoc/preview-mermaid.js" | relURL }}"></script>
+</head><body>{{ partial "mdoc/theme-menu.html" . }}{{ partial "mdoc/preview-input.html" . }}{{ partial "mdoc/tree-mobile.html" . }}
+<div class="layout">{{ partial "mdoc/tree.html" . }}<main><article>{{ block "main" . }}{{ end }}</article></main></div><footer>{{ if .Site.Params.mdocPreview }}由本地 Mdocman 服务实时渲染{{ else }}{{ .Site.Title }} · Mdocman / Hugo{{ end }}</footer></body></html>

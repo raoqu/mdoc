@@ -47,11 +47,12 @@ type Folder struct {
 	Children []Folder `json:"children"`
 }
 type Notebook struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Accent      string   `json:"accent"`
-	Folders     []Folder `json:"folders"`
+	PinnedTree  []documentTreeNode `json:"pinnedTree"`
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Accent      string             `json:"accent"`
+	Folders     []Folder           `json:"folders"`
 }
 type server struct {
 	db            *sql.DB
@@ -74,6 +75,7 @@ func openDBAt(databasePath string) (*sql.DB, error) {
 	schema := `CREATE TABLE IF NOT EXISTS notebooks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',accent TEXT NOT NULL DEFAULT '#4d6b52',position INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,parent_id TEXT, title TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE,FOREIGN KEY(parent_id) REFERENCES folders(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,folder_id TEXT,title TEXT NOT NULL,content TEXT NOT NULL DEFAULT '',position INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE,FOREIGN KEY(folder_id) REFERENCES folders(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS pinned_trees(notebook_id TEXT PRIMARY KEY,nodes_json TEXT NOT NULL DEFAULT '[]',FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS shares(token TEXT PRIMARY KEY,document_id TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL,FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS ai_providers(id TEXT PRIMARY KEY,provider TEXT NOT NULL,label TEXT NOT NULL,model TEXT NOT NULL,key_hint TEXT NOT NULL DEFAULT '',base_url TEXT NOT NULL DEFAULT '',is_default INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chat_conversations(id TEXT PRIMARY KEY,notebook_id TEXT NOT NULL,title TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE);
@@ -172,6 +174,17 @@ func (s *server) load() ([]Notebook, error) {
 		if err != nil {
 			return nil, err
 		}
+		var treeJSON string
+		treeErr := s.database().QueryRow(`SELECT nodes_json FROM pinned_trees WHERE notebook_id=?`, b.ID).Scan(&treeJSON)
+		if treeErr != nil && treeErr != sql.ErrNoRows {
+			return nil, treeErr
+		}
+		if treeJSON != "" {
+			if err = json.Unmarshal([]byte(treeJSON), &b.PinnedTree); err != nil {
+				return nil, err
+			}
+		}
+		b.PinnedTree = normalizeDocumentTree(b.PinnedTree, notebookDocuments(b))
 		books = append(books, b)
 	}
 	return books, rows.Err()
@@ -358,6 +371,13 @@ func (s *server) save(books []Notebook) error {
 		if err = put(b.Folders, nil); err != nil {
 			return err
 		}
+		treeJSON, err := json.Marshal(normalizeDocumentTree(b.PinnedTree, notebookDocuments(b)))
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO pinned_trees(notebook_id,nodes_json) VALUES(?,?)`, b.ID, string(treeJSON)); err != nil {
+			return err
+		}
 	}
 	for _, x := range shares {
 		_, _ = tx.Exec(`INSERT OR IGNORE INTO shares(token,document_id,created_at) VALUES(?,?,?)`, x.token, x.documentID, x.createdAt)
@@ -473,7 +493,13 @@ func (s *server) document(w http.ResponseWriter, r *http.Request) {
 		}
 		aliasesJSON, _ := json.Marshal(incoming.Aliases)
 		updated := time.Now().Format(time.RFC3339Nano)
-		result, err := s.database().Exec(`UPDATE documents SET title=?,content=?,updated_at=?,pinned=?,trashed=?,private=?,aliases_json=?,revision=revision+1 WHERE id=? AND revision=?`,
+		tx, err := s.database().Begin()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer tx.Rollback()
+		result, err := tx.Exec(`UPDATE documents SET title=?,content=?,updated_at=?,pinned=?,trashed=?,private=?,aliases_json=?,revision=revision+1 WHERE id=? AND revision=?`,
 			incoming.Title, incoming.Content, updated, incoming.Pinned, incoming.Trashed, incoming.Private, string(aliasesJSON), id, incoming.Revision)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -481,6 +507,7 @@ func (s *server) document(w http.ResponseWriter, r *http.Request) {
 		}
 		affected, _ := result.RowsAffected()
 		if affected == 0 {
+			_ = tx.Rollback()
 			current, currentErr := s.documentByID(id)
 			if currentErr == sql.ErrNoRows {
 				http.Error(w, "document not found", 404)
@@ -493,6 +520,14 @@ func (s *server) document(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(current)
+			return
+		}
+		if err = repairDocumentTree(tx, id); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
 		current, err := s.documentByID(id)
@@ -871,18 +906,7 @@ func slug(s string) string {
 
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{{.Title}}</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body)"></script><script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';document.querySelectorAll('code.language-mermaid').forEach(e=>{const p=e.parentElement,d=document.createElement('div');d.className='mermaid';d.textContent=e.textContent;p.replaceWith(d)});mermaid.initialize({startOnLoad:true,theme:'neutral'});</script></head><body><header><a href="/">墨笺</a><nav>{{.Book}}</nav></header><div class="layout">{{if .Sidebar}}<aside><b>目录</b>{{range .Links}}<a {{if eq .URL $.Current}}class="active"{{end}} href="{{.URL}}">{{.Title}}</a>{{end}}</aside>{{end}}<main><article>{{.HTML}}</article></main></div><footer>由 Mdocman 增量生成 · {{.Date}}</footer></body></html>`
 
-const previewPage = `<!doctype html><html lang="zh-CN" data-preview-theme="default"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><link rel="stylesheet" href="/_mdoc/themes/default.css"><link id="preview-theme-stylesheet" rel="stylesheet" href="/_mdoc/themes/default.css"><script defer src="/_mdoc/preview-theme.js"></script><script type="module" src="/_mdoc/preview-mermaid.js"></script></head><body>` + previewThemeMenu + `<div class="layout"><main><article>{{.HTML}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>`
-const previewContentSecurityPolicy = "default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net; base-uri 'none'; form-action 'none'"
-
-func writePreviewPage(w http.ResponseWriter, title string, html template.HTML) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", previewContentSecurityPolicy)
-	t := template.Must(template.New("preview").Parse(previewPage))
-	if err := t.Execute(w, map[string]any{"Title": title, "HTML": html, "Themes": previewThemes}); err != nil {
-		log.Printf("preview render: %v", err)
-	}
-}
+const previewContentSecurityPolicy = "default-src 'none'; img-src 'self' data: https:; font-src 'self' data: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; base-uri 'none'; form-action 'self'"
 
 func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/preview/")
@@ -890,6 +914,14 @@ func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "document id required", http.StatusBadRequest)
 		return
 	}
+	s.publicationMu.RLock()
+	defer s.publicationMu.RUnlock()
+	scoped, root, err := s.publicationScope()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s = scoped
 	var title, content, book string
 	if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
@@ -918,7 +950,21 @@ func (s *server) previewDocument(w http.ResponseWriter, r *http.Request) {
 		title = "未命名笔记"
 	}
 	title = markdownFrontmatterTitle(content, title)
-	writePreviewPage(w, title, s.render(markdownBody(content)))
+	config, err := readPublicationConfig(root)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	tree, err := s.knowledgePreviewTree(id)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	data := pathPreviewPageData{Title: title, Markdown: markdownBody(content), Tree: tree, TreeID: filepath.Base(root)}
+	if r.Method == http.MethodPost {
+		data.PreviewInput = map[string]string{"Title": title, "Content": content, "Book": book}
+	}
+	writeHugoPreview(w, r, scoped, config, data)
 }
 
 type siteLink struct{ Title, URL string }

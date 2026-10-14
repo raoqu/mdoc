@@ -196,7 +196,8 @@ kbd {
   cursor: default;
 }
 
-.sidebar-topline > .sidebar-publish-button.publishing {
+.sidebar-topline > .sidebar-publish-button.publishing,
+.sidebar-topline > .sidebar-preview-button.previewing {
   opacity: 1;
   color: var(--accent);
   background: var(--accent-soft);
@@ -2303,3 +2304,21 @@ kbd {
 .publication-theme-state { margin-left: 12px; font-size: 12px; color: var(--text-muted); }
 .publication-documents { padding-left: 20px; line-height: 1.8; max-height: 260px; overflow: auto; }
 .publication-log { padding: 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+
+/* Pinned document navigation shares its persisted hierarchy with Hugo. */
+.pinned-document-tree ul { list-style: none; margin: 0; padding: 0; }
+.pinned-document-tree ul ul { padding-left: 16px; }
+.pinned-tree-row { display: flex; align-items: center; position: relative; border-radius: 6px; }
+.pinned-tree-row:hover, .pinned-tree-row.active { background: var(--surface-hover, rgba(120,120,140,.1)); }
+.pinned-tree-grip { flex: none; opacity: .35; cursor: grab; }
+.pinned-document-tree .pinned-tree-row button { margin: 0; min-width: 0; padding: 5px 2px; border: 0; background: transparent; }
+.pinned-document-tree .pinned-tree-toggle { display: grid; width: 18px; min-width: 18px; flex: none; place-items: center; }
+.pinned-tree-toggle .expanded { transform: rotate(90deg); }
+.pinned-document-tree .pinned-tree-link { display: block; flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-document-tree .pinned-tree-unpin { width: 22px; flex: none; opacity: 0; }
+.pinned-tree-row:hover .pinned-tree-unpin, .pinned-tree-row:focus-within .pinned-tree-unpin { opacity: 1; }
+.pinned-tree-row[data-drop=before]::before, .pinned-tree-row[data-drop=after]::after { content: ""; position: absolute; left: 12px; right: 0; height: 2px; background: #7664e8; }
+.pinned-tree-row[data-drop=before]::before { top: 0; }.pinned-tree-row[data-drop=after]::after { bottom: 0; }
+.pinned-tree-row[data-drop=inside] { outline: 2px solid #7664e8; outline-offset: -2px; }
+.pinned-tree-hint { margin: 0 0 6px; font-size: 10px; opacity: .6; line-height: 1.5; }
+.pinned-tree-root-drop { padding: 10px; margin-top: 8px; border: 1px dashed currentColor; border-radius: 6px; font-size: 11px; text-align: center; }

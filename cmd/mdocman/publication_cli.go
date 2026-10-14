@@ -41,6 +41,10 @@ func runPublicationCLI(s *server, args []string, out io.Writer) error {
 			if err != nil {
 				return err
 			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(data, &fields) == nil && fields["theme"] == nil && fields["themeModule"] != nil {
+				config.Theme = ""
+			}
 			if err = json.Unmarshal(data, &config); err != nil {
 				return err
 			}

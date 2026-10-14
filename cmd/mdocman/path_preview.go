@@ -49,9 +49,6 @@ type pathPreviewOrder struct {
 	numeric bool
 }
 
-const pathPreviewPage = `<!doctype html><html lang="zh-CN" data-preview-theme="default"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Cache-Control" content="no-store"><title>{{.Title}} · 预览</title><link rel="stylesheet" href="/_mdoc/themes/default.css"><link id="preview-theme-stylesheet" rel="stylesheet" href="/_mdoc/themes/default.css"><script defer src="/_mdoc/preview-theme.js"></script><script type="module" src="/_mdoc/preview-mermaid.js"></script></head><body>` + previewThemeMenu + `<div class="layout">{{if .ShowTree}}<aside class="path-tree" data-path-tree-id="{{.TreeID}}">{{template "tree" .Tree}}</aside>{{end}}<main><article>{{if .Directory}}<h1>{{.Title}}</h1><ul class="directory-list">{{range .Entries}}<li><a href="{{.URL}}">{{if .IsDir}}📁 {{else}}📄 {{end}}{{.Name}}</a></li>{{else}}<li>此目录中没有 Markdown 文件。</li>{{end}}</ul>{{else}}{{.HTML}}{{end}}</article></main></div><footer>由本地 Mdocman 服务实时渲染</footer></body></html>
-{{define "tree"}}<ul>{{range .}}{{if .IsDir}}{{if .NameToggles}}<li><details class="path-tree-directory-fold" data-path-tree-key="{{.TreeKey}}" open><summary>{{.Name}}</summary>{{template "tree" .Children}}</details></li>{{else}}<li class="path-tree-directory"><div class="path-tree-directory-row">{{if .Children}}<details class="path-tree-directory-toggle" data-path-tree-key="{{.TreeKey}}" open><summary aria-label="展开或折叠 {{.Name}}" title="展开或折叠"></summary></details>{{else}}<span class="path-tree-directory-toggle-spacer"></span>{{end}}{{if .URL}}<a class="path-tree-directory-link{{if .Active}} active{{end}}" href="{{.URL}}"{{if .Active}} aria-current="page"{{end}}>{{.Name}}</a>{{else}}<span class="path-tree-directory-name">{{.Name}}</span>{{end}}</div>{{template "tree" .Children}}</li>{{end}}{{else}}<li><a href="{{.URL}}"{{if .Active}} class="active" aria-current="page"{{end}}>{{.Name}}</a></li>{{end}}{{end}}</ul>{{end}}`
-
 func pathPreviewArgument(args []string) (string, bool) {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		return "", false
@@ -124,14 +121,14 @@ func (p *pathPreviewServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if index := markdownIndex(target); index != "" {
-			p.renderMarkdownFile(w, index)
+			p.renderMarkdownFile(w, r, index)
 			return
 		}
-		p.renderDirectory(w, target, r.URL.Path)
+		p.renderDirectory(w, r, target, r.URL.Path)
 		return
 	}
 	if isMarkdownPath(target) {
-		p.renderMarkdownFile(w, target)
+		p.renderMarkdownFile(w, r, target)
 		return
 	}
 	http.ServeFile(w, r, target)
@@ -157,7 +154,7 @@ func (p *pathPreviewServer) resolve(relative string) (string, bool) {
 	return resolved, true
 }
 
-func (p *pathPreviewServer) renderMarkdownFile(w http.ResponseWriter, filename string) {
+func (p *pathPreviewServer) renderMarkdownFile(w http.ResponseWriter, r *http.Request, filename string) {
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -167,14 +164,13 @@ func (p *pathPreviewServer) renderMarkdownFile(w http.ResponseWriter, filename s
 		string(content),
 		strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)),
 	)
-	renderer := &server{md: p.md}
-	p.writePage(w, pathPreviewPageData{
-		Title: title,
-		HTML:  renderer.render(markdownBody(string(content))),
+	p.writePage(w, r, pathPreviewPageData{
+		Title:    title,
+		Markdown: markdownBody(string(content)),
 	}, filename)
 }
 
-func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, directory, requestPath string) {
+func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, r *http.Request, directory, requestPath string) {
 	items, err := os.ReadDir(directory)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -202,7 +198,7 @@ func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, directory, re
 	if requestPath == "/" {
 		title = filepath.Base(p.root)
 	}
-	p.writePage(w, pathPreviewPageData{
+	p.writePage(w, r, pathPreviewPageData{
 		Title:     title,
 		Directory: true,
 		Entries:   entries,
@@ -210,19 +206,21 @@ func (p *pathPreviewServer) renderDirectory(w http.ResponseWriter, directory, re
 }
 
 type pathPreviewPageData struct {
-	Title     string
-	TreeID    string
-	HTML      template.HTML
-	Themes    []previewTheme
-	ShowTree  bool
-	Directory bool
-	Entries   []pathPreviewEntry
-	Tree      []pathPreviewTreeNode
+	Title        string
+	TreeID       string
+	HTML         template.HTML
+	Themes       []hugoTheme
+	Markdown     string
+	PreviewInput map[string]string
+	CurrentURL   string
+	ShowTree     bool
+	Directory    bool
+	Entries      []pathPreviewEntry
+	Tree         []pathPreviewTreeNode
 }
 
-func (p *pathPreviewServer) writePage(w http.ResponseWriter, data pathPreviewPageData, activeFilename string) {
+func (p *pathPreviewServer) writePage(w http.ResponseWriter, r *http.Request, data pathPreviewPageData, activeFilename string) {
 	data.ShowTree = p.directoryMode
-	data.Themes = previewThemes
 	if p.directoryMode {
 		data.TreeID = fmt.Sprintf("%x", sha256.Sum256([]byte(p.root)))[:16]
 		activeRelative := ""
@@ -236,13 +234,16 @@ func (p *pathPreviewServer) writePage(w http.ResponseWriter, data pathPreviewPag
 		}
 		data.Tree = tree
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", previewContentSecurityPolicy)
-	t := template.Must(template.New("path-preview").Parse(pathPreviewPage))
-	if err := t.Execute(w, data); err != nil {
-		log.Printf("path preview render: %v", err)
+	workspace, err := defaultWorkspaceDirectory()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
 	}
+	theme := strings.TrimSpace(os.Getenv("MDOC_THEME"))
+	if theme == "" {
+		theme = "default"
+	}
+	writeHugoPreview(w, r, &server{dataDir: workspace}, publicationConfig{Theme: theme, Title: data.Title, IncludeTOC: true}, data)
 }
 
 func (p *pathPreviewServer) buildTree(directory, activeRelative string) ([]pathPreviewTreeNode, error) {

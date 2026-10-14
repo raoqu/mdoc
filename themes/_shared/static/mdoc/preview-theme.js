@@ -6,13 +6,12 @@
   const options = Array.from(
     document.querySelectorAll("[data-preview-theme-option]"),
   );
-  const stylesheet = document.querySelector("#preview-theme-stylesheet");
+  const currentTheme = document.querySelector('meta[name="mdoc-theme"]')?.content || "default";
 
   if (
     !(switcher instanceof HTMLElement) ||
     !(toggle instanceof HTMLButtonElement) ||
-    !(menu instanceof HTMLElement) ||
-    !(stylesheet instanceof HTMLLinkElement)
+    !(menu instanceof HTMLElement)
   ) {
     return;
   }
@@ -22,15 +21,20 @@
   );
 
   const applyTheme = (theme, persist = true) => {
-    const selected = supportedThemes.has(theme) ? theme : "default";
+    const selected = supportedThemes.has(theme) ? theme : currentTheme;
     document.documentElement.dataset.previewTheme = selected;
-    stylesheet.href = `/_mdoc/themes/${selected}.css`;
-    options.forEach((option) => {
-      option.setAttribute(
-        "aria-checked",
-        String(option.dataset.previewThemeOption === selected),
-      );
-    });
+    if (selected !== currentTheme) {
+      const target = new URL(location.href);
+      target.searchParams.set("theme", selected);
+      document.cookie = `mdoc-theme=${encodeURIComponent(selected)}; Path=/; SameSite=Lax; Max-Age=31536000`;
+      const form = document.querySelector("[data-preview-input]");
+      if (form instanceof HTMLFormElement) {
+        form.action = target.href;
+        form.requestSubmit();
+      } else {
+        location.replace(target.href);
+      }
+    }
     if (persist) {
       try {
         localStorage.setItem(storageKey, selected);
@@ -50,14 +54,14 @@
     }
   };
 
-  let savedTheme = "default";
+  let savedTheme = currentTheme;
   try {
     savedTheme = localStorage.getItem(storageKey) || savedTheme;
   } catch {
     // Use the default theme when storage is disabled.
   }
 
-  applyTheme(savedTheme, false);
+  applyTheme(new URL(location.href).searchParams.has("theme") ? currentTheme : savedTheme, false);
   toggle.addEventListener("click", () => {
     setMenuOpen(menu.hidden, menu.hidden);
   });
@@ -82,7 +86,7 @@
 })();
 
 (() => {
-  const tree = document.querySelector("[data-path-tree-id]");
+  document.querySelectorAll("[data-path-tree-id]").forEach((tree) => {
   if (!(tree instanceof HTMLElement) || !tree.dataset.pathTreeId) {
     return;
   }
@@ -171,4 +175,5 @@
     }
   });
   window.addEventListener("pagehide", saveScrollTop);
+  });
 })();

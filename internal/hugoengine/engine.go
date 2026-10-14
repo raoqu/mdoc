@@ -72,6 +72,15 @@ func VendorTheme(ctx context.Context, source string) (string, error) {
 // as Sass, image transformations and JS compilation. Themes are already vendored
 // and external programs are denied for builds; no runtime Go or Hugo is needed.
 func Build(ctx context.Context, source, destination, baseURL string) (string, error) {
+	return build(ctx, source, destination, baseURL, true)
+}
+
+// BuildPreview uses the same native theme pipeline without HTML minification.
+func BuildPreview(ctx context.Context, source, destination, baseURL string) (string, error) {
+	return build(ctx, source, destination, baseURL, false)
+}
+
+func build(ctx context.Context, source, destination, baseURL string, minify bool) (string, error) {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 	var log bytes.Buffer
@@ -83,7 +92,7 @@ func Build(ctx context.Context, source, destination, baseURL string) (string, er
 	flags.Set("publishDir", destination)
 	flags.Set("publishDirStatic", destination)
 	flags.Set("publishDirDynamic", destination)
-	flags.Set("minify", true)
+	flags.Set("minify", minify)
 	flags.Set("module.proxy", "off")
 	flags.Set("security.exec.allow", []string{"none"})
 	configs, err := loadConfig(ctx, source, flags, &log)

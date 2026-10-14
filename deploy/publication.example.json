@@ -1,4 +1,6 @@
 {
+  "theme": "stack",
+  "treeTheme": "default",
   "title": "墨笺文档",
   "baseURL": "https://mdoc.raoqu.cc/",
   "subtitle": "公开的笔记与文档",

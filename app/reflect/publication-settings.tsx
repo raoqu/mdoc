@@ -88,7 +88,8 @@ export function PublicationSettings({ knowledgeBaseLabel, pendingSave, publishin
 
   if (!config || !status || !target) return <section><p role="status">{log || "正在读取发布配置…"}</p>{log ? <button type="button" onClick={() => void refresh().catch((error: unknown) => setLog(String(error)))}>重试</button> : null}</section>;
   const disabled = Boolean(working) || pendingSave || publishing;
-  const installed = status.themeInstalled && config.themeModule === status.config.themeModule && config.themeVersion === status.config.themeVersion;
+  const selectedTheme = status.themes?.find((theme) => theme.id === config.theme);
+  const installed = Boolean(selectedTheme && !selectedTheme.module) || (status.themeInstalled && (config.theme ?? "") === (status.config.theme ?? "") && config.themeModule === status.config.themeModule && config.themeVersion === status.config.themeVersion);
   const field = (key: keyof PublicationConfig, value: string | boolean) => setConfig({ ...config, [key]: value });
 
   return <section className="publication-settings">
@@ -112,11 +113,12 @@ export function PublicationSettings({ knowledgeBaseLabel, pendingSave, publishin
     </fieldset>
     <fieldset disabled={disabled}>
       <legend>Hugo 主题</legend>
-      <p className="settings-section-copy">站点生成引擎已内置，无需另装 Hugo。默认采用博客使用的 Stack v3.31.0。主题单独安装、固定版本；切换后重新安装，再构建预览。</p>
-      <label>主题模块<input value={config.themeModule} onChange={(event) => field("themeModule", event.target.value)} /></label>
-      <label>固定版本<input value={config.themeVersion} onChange={(event) => field("themeVersion", event.target.value)} /></label>
-      <button type="button" onClick={() => void run("theme")}><Download size={15} />{working === "theme" ? "安装中…" : installed ? "检查主题安装" : "安装主题"}</button>
-      <span className="publication-theme-state">{installed ? "所选主题已安装" : "所选主题尚未安装"}</span>
+      <p className="settings-section-copy">文件预览和发布共用 Hugo 主题。内置主题可直接使用；Stack 等模块主题首次使用前需安装。导航目录来自侧栏已固定文档的树结构，仅包含已发布且公开的节点。</p>
+      <label>主题<select value={config.theme ?? ""} onChange={(event) => field("theme", event.target.value)}>{status.themes?.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}<option value="">自定义 Hugo Module</option></select></label>
+      <label>目录树样式<input value={config.treeTheme ?? ""} onChange={(event) => field("treeTheme", event.target.value)} placeholder="跟随主题；可填 default 或 compact" /></label>
+      {!config.theme ? <><label>主题模块<input value={config.themeModule} onChange={(event) => field("themeModule", event.target.value)} /></label><label>固定版本<input value={config.themeVersion} onChange={(event) => field("themeVersion", event.target.value)} /></label></> : selectedTheme?.module ? <p className="settings-section-copy">{selectedTheme.module} · {selectedTheme.version}</p> : null}
+      {(!config.theme || selectedTheme?.module) ? <button type="button" onClick={() => void run("theme")}><Download size={15} />{working === "theme" ? "安装中…" : installed ? "检查主题安装" : "安装主题"}</button> : null}
+      <span className="publication-theme-state">{installed ? "所选主题可用" : "所选主题尚未安装"}</span>
     </fieldset>
     <div className="publication-actions">
       <button type="button" disabled={disabled} onClick={() => void run("save")}><Save size={15} />保存配置</button>

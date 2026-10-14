@@ -1,4 +1,6 @@
 export interface PublicationConfig {
+  theme?: string;
+  treeTheme?: string;
   title: string;
   baseURL: string;
   subtitle: string;
@@ -9,6 +11,7 @@ export interface PublicationConfig {
 }
 
 export interface PublicationStatus {
+  themes?: { id: string; label: string; module?: string; version?: string; treeTheme?: string }[];
   config: PublicationConfig;
   documents: { id: string; title: string; url: string }[];
   themeInstalled: boolean;
@@ -27,6 +30,11 @@ export interface PublicationDeployInput {
 }
 
 export interface PublicationDeployment {
+  status: PublicationStatus;
+  result: PublicationResult;
+}
+
+export interface PublicationPreview {
   status: PublicationStatus;
   result: PublicationResult;
 }
@@ -51,6 +59,18 @@ export async function deployPublication(input?: PublicationDeployInput): Promise
     throw new PublicationSetupError("请先在发布配置中安装所选主题");
   }
   const result = await publicationResponseJSON<PublicationResult>(await fetch("/api/publication/deploy", {
+    method: "POST",
+    headers: { "X-Mdoc-Publication-Directory": status.directory },
+  }));
+  return { status, result };
+}
+
+export async function previewPublication(): Promise<PublicationPreview> {
+  const status = await publicationResponseJSON<PublicationStatus>(await fetch("/api/publication"));
+  if (!status.themeInstalled) {
+    throw new PublicationSetupError("请先在发布配置中安装所选主题");
+  }
+  const result = await publicationResponseJSON<PublicationResult>(await fetch("/api/publication/build", {
     method: "POST",
     headers: { "X-Mdoc-Publication-Directory": status.directory },
   }));

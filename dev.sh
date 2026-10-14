@@ -26,13 +26,14 @@ trap cleanup EXIT INT TERM
 
 command -v go >/dev/null 2>&1 || { echo "错误：未找到 Go。" >&2; exit 1; }
 
+export MDOC_THEME_DIR="${MDOC_THEME_DIR:-$ROOT_DIR/themes}"
+
 if (( $# > 0 )); then
   if (( $# != 1 )); then
     echo "用法：./dev.sh [Markdown 文件或目录]" >&2
     exit 2
   fi
-  # Read theme styles from disk on every request so a browser refresh picks up
-  # CSS edits without restarting the Go preview process.
+  # Read native Hugo layouts, components and styles from disk on refresh.
   export MDOC_PREVIEW_THEME_DIR="$ROOT_DIR/themes"
   echo "启动 Markdown 开发预览（跳过前端构建）：$1"
   exec go run -tags extended ./cmd/mdocman "$1"

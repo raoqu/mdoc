@@ -2,7 +2,7 @@ package themeassets
 
 import "embed"
 
-// Files contains the preview theme styles that ship with the standalone binary.
+// Files contains native Hugo themes and shared components for previews and publication.
 //
-//go:embed *.css
+//go:embed all:*
 var Files embed.FS

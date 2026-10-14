@@ -72,7 +72,9 @@ func TestMarkdownFrontmatterTitle(t *testing.T) {
 }
 
 func TestPreviewPageHasNoHeader(t *testing.T) {
-	if strings.Contains(previewPage, "<header") || strings.Contains(previewPage, "Markdown 预览") {
+	response := httptest.NewRecorder()
+	writePreviewPage(response, "Example", template.HTML("<p>Example</p>"))
+	if strings.Contains(response.Body.String(), "<header") || strings.Contains(response.Body.String(), "Markdown 预览") {
 		t.Fatalf("preview header is still present")
 	}
 }
@@ -83,10 +85,10 @@ func TestPreviewPageIncludesThemeSwitcher(t *testing.T) {
 	body := response.Body.String()
 	for _, expected := range []string{
 		`data-preview-theme="default"`,
-		`href="/_mdoc/themes/default.css"`,
+		`/mdoc/base.css"`,
 		`id="preview-theme-stylesheet"`,
-		`src="/_mdoc/preview-theme.js"`,
-		`src="/_mdoc/preview-mermaid.js"`,
+		`/mdoc/preview-theme.js"`,
+		`/mdoc/preview-mermaid.js"`,
 		`data-preview-theme-toggle`,
 		`aria-label="切换预览主题"`,
 		`data-preview-theme-menu`,
@@ -109,7 +111,7 @@ func TestPreviewPageIncludesThemeSwitcher(t *testing.T) {
 	for _, expected := range []string{
 		"script-src 'self'",
 		"https://cdn.jsdelivr.net",
-		"connect-src https://cdn.jsdelivr.net",
+		"connect-src 'self' https://cdn.jsdelivr.net",
 	} {
 		if !strings.Contains(policy, expected) {
 			t.Fatalf("preview CSP missing %q: %q", expected, policy)
@@ -163,9 +165,6 @@ func TestDefaultPreviewThemeDefinesTypographyContract(t *testing.T) {
 		".mermaid-expand {",
 		".mermaid-lightbox {",
 		".mermaid-lightbox-stage {",
-		".path-tree-directory-fold > summary {",
-		".path-tree-directory-toggle > summary {",
-		".path-tree-directory:has(",
 	} {
 		if !strings.Contains(css, expected) {
 			t.Fatalf("default.css missing theme contract %q", expected)
@@ -221,10 +220,10 @@ func TestYaheiPreviewThemeUsesCrossPlatformCompactTypography(t *testing.T) {
 		`"Hiragino Sans GB"`,
 		`"Noto Sans CJK SC"`,
 		"--preview-body-font-size: 14px",
-		"--preview-body-line-height: 16px",
-		"--preview-table-line-height: 14px",
-		"--preview-code-line-height: 14px",
-		"--preview-quote-line-height: 14px",
+		"--preview-body-line-height: 22px",
+		"--preview-table-line-height: 18px",
+		"--preview-code-line-height: 18px",
+		"--preview-quote-line-height: 18px",
 	} {
 		if !strings.Contains(theme, expected) {
 			t.Fatalf("yahei.css missing compact typography %q", expected)
@@ -259,7 +258,8 @@ func TestPreviewThemeAssetsAreEmbedded(t *testing.T) {
 
 func TestPreviewThemeRefreshReadsUpdatedDevelopmentCSS(t *testing.T) {
 	themeDir := t.TempDir()
-	themeFile := filepath.Join(themeDir, "default.css")
+	themeFile := filepath.Join(themeDir, "default/static/mdoc/base.css")
+	writeTestFile(t, filepath.Join(themeDir, "default/theme.json"), `{"id":"default","label":"Default"}`)
 	t.Setenv(previewThemeDirEnv, themeDir)
 	writeTestFile(t, themeFile, "/* first version */")
 
@@ -316,7 +316,7 @@ func TestPathPreviewUsesDirectoryReadmeAndServesRelativeAssets(t *testing.T) {
 	}
 
 	index := serveTestPath(t, preview, "/")
-	if !strings.Contains(index, "<h1>Project</h1>") || !strings.Contains(index, `src="assets/logo.txt"`) {
+	if !strings.Contains(index, `<h1 id="project">Project</h1>`) || !strings.Contains(index, `src="assets/logo.txt"`) {
 		t.Fatalf("directory README was not rendered: %s", index)
 	}
 	if asset := serveTestPath(t, preview, "/assets/logo.txt"); asset != "asset-body" {
@@ -404,7 +404,7 @@ func TestPathPreviewUsesFrontmatterTitlesInPageAndTree(t *testing.T) {
 	}
 
 	guide := serveTestPath(t, preview, "/guide/")
-	if !strings.Contains(guide, `<title>使用指南 · 预览</title>`) || !strings.Contains(guide, `<h1>Guide</h1>`) {
+	if !strings.Contains(guide, `<title>使用指南 · 预览</title>`) || !strings.Contains(guide, `<h1 id="guide">Guide</h1>`) {
 		t.Fatalf("directory index did not use its frontmatter title: %s", guide)
 	}
 }
@@ -497,7 +497,7 @@ func TestPathPreviewDirectoryLinkRequiresVisibleIndexBody(t *testing.T) {
 		`href="/empty/empty-child.md">empty-child</a>`,
 		`class="path-tree-directory-toggle" data-path-tree-key="visible" open><summary aria-label="展开或折叠 可查看目录"`,
 		`</summary></details><a class="path-tree-directory-link active"`,
-		`<h1>正文</h1>`,
+		`<h1 id="正文">正文</h1>`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("directory index behavior missing %q: %s", expected, body)

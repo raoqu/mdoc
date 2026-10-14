@@ -26,6 +26,8 @@ import (
 const stackModule = "github.com/CaiJimmy/hugo-theme-stack/v3"
 
 type publicationConfig struct {
+	Theme        string `json:"theme,omitempty"`
+	TreeTheme    string `json:"treeTheme,omitempty"`
 	Title        string `json:"title"`
 	BaseURL      string `json:"baseURL"`
 	Subtitle     string `json:"subtitle"`
@@ -45,7 +47,7 @@ type publicationResult struct {
 }
 
 func defaultPublicationConfig() publicationConfig {
-	return publicationConfig{Title: "墨笺文档", BaseURL: "https://mdoc.raoqu.cc/", Subtitle: "公开的笔记与文档", ThemeModule: stackModule, ThemeVersion: "v3.31.0", IncludeTOC: true, DeployTarget: "root@10.6.0.1:/www/wwwroot/mdoc/"}
+	return publicationConfig{Theme: "stack", Title: "墨笺文档", BaseURL: "https://mdoc.raoqu.cc/", Subtitle: "公开的笔记与文档", ThemeModule: stackModule, ThemeVersion: "v3.31.0", IncludeTOC: true, DeployTarget: "root@10.6.0.1:/www/wwwroot/mdoc/"}
 }
 
 // Each database has its own settings, content projection and output. Freeze the
@@ -72,6 +74,10 @@ func readPublicationConfig(root string) (publicationConfig, error) {
 	if err != nil {
 		return config, err
 	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) == nil && fields["theme"] == nil {
+		config.Theme = ""
+	}
 	err = json.Unmarshal(data, &config)
 	if err == nil {
 		config.BaseURL = strings.TrimRight(config.BaseURL, "/") + "/"
@@ -84,6 +90,14 @@ var themeVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-
 var deployTargetPattern = regexp.MustCompile(`^(?:[a-zA-Z0-9_][a-zA-Z0-9_.-]*@)?[a-zA-Z0-9][a-zA-Z0-9.-]*:(/[a-zA-Z0-9_./-]+)$`)
 
 func validatePublicationConfig(config publicationConfig) error {
+	resolved, err := resolveThemeConfig(config)
+	if err != nil {
+		return err
+	}
+	config = resolved
+	if config.TreeTheme != "" && !themeIDPattern.MatchString(config.TreeTheme) {
+		return errors.New("无效目录树样式")
+	}
 	if strings.TrimSpace(config.Title) == "" {
 		return errors.New("请输入站点标题")
 	}
@@ -91,7 +105,7 @@ func validatePublicationConfig(config publicationConfig) error {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || path.Clean(u.Path) != strings.TrimSuffix(u.Path, "/") && u.Path != "" && u.Path != "/" {
 		return errors.New("站点 URL 必须是完整的 HTTP(S) 地址，可带子路径，不含查询参数")
 	}
-	if !themeModulePattern.MatchString(config.ThemeModule) || !strings.Contains(strings.Split(config.ThemeModule, "/")[0], ".") || !themeVersionPattern.MatchString(config.ThemeVersion) {
+	if (config.Theme == "" || config.ThemeModule != "") && (!themeModulePattern.MatchString(config.ThemeModule) || !strings.Contains(strings.Split(config.ThemeModule, "/")[0], ".") || !themeVersionPattern.MatchString(config.ThemeVersion)) {
 		return errors.New("主题需使用 Hugo Module 路径及固定版本号（如 v3.31.0）")
 	}
 	if config.DeployTarget != "" {
@@ -221,7 +235,12 @@ func (s *server) publicationSettings(w http.ResponseWriter, r *http.Request) {
 	for _, doc := range docs {
 		summaries = append(summaries, map[string]string{"id": doc.ID, "title": doc.Title, "url": config.BaseURL + doc.Route})
 	}
-	jsonOut(w, map[string]any{"config": config, "documents": summaries, "themeInstalled": scoped.publicationThemeInstalled(config), "hugoVersion": hugoengine.Version(), "hugoExtended": hugoengine.Extended(), "directory": root, "previewURL": "/site/"})
+	themes, err := hugoThemes()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	jsonOut(w, map[string]any{"themes": themes, "config": config, "documents": summaries, "themeInstalled": scoped.publicationThemeInstalled(config), "hugoVersion": hugoengine.Version(), "hugoExtended": hugoengine.Extended(), "directory": root, "previewURL": "/site/"})
 }
 
 func (s *server) publicationActions(w http.ResponseWriter, r *http.Request) {
@@ -310,12 +329,21 @@ func publicationCommand(ctx context.Context, dir, name string, args ...string) (
 }
 
 func (s *server) publicationThemeDir(config publicationConfig) string {
+	config, _ = resolveThemeConfig(config)
 	hash := sha256.Sum256([]byte(config.ThemeModule + "@" + config.ThemeVersion))
 	dir, _ := filepath.Abs(s.workspacePath("publishing", "themes", fmt.Sprintf("%x", hash[:16])))
 	return dir
 }
 
 func (s *server) publicationThemeInstalled(config publicationConfig) bool {
+	resolved, err := resolveThemeConfig(config)
+	if err != nil {
+		return false
+	}
+	config = resolved
+	if config.Theme != "" && config.ThemeModule == "" {
+		return true
+	}
 	data, err := os.ReadFile(filepath.Join(s.publicationThemeDir(config), "installed.json"))
 	var installed publicationConfig
 	return err == nil && json.Unmarshal(data, &installed) == nil && installed.ThemeModule == config.ThemeModule && installed.ThemeVersion == config.ThemeVersion
@@ -331,6 +359,14 @@ func publicationModuleConfig(config publicationConfig) map[string]any {
 }
 
 func (s *server) installPublicationTheme(ctx context.Context, config publicationConfig) (string, error) {
+	resolved, resolveErr := resolveThemeConfig(config)
+	if resolveErr != nil {
+		return "", resolveErr
+	}
+	config = resolved
+	if config.Theme != "" && config.ThemeModule == "" {
+		return "内置 Hugo 主题无需安装：" + config.Theme, nil
+	}
 	if err := validatePublicationConfig(config); err != nil {
 		return "", err
 	}
@@ -445,12 +481,31 @@ func copyPublicationFile(source, destination string) error {
 }
 
 func publicationHugoConfig(config publicationConfig) map[string]any {
+	id := config.Theme
+	if id == "" {
+		if config.ThemeModule == stackModule {
+			id = "stack"
+		} else {
+			id = "external"
+		}
+	}
+	treeTheme := config.TreeTheme
+	if treeTheme == "" {
+		treeTheme = "default"
+		if chain, err := hugoThemeChain(id); err == nil {
+			for _, theme := range chain {
+				if theme.TreeTheme != "" {
+					treeTheme = theme.TreeTheme
+				}
+			}
+		}
+	}
 	return map[string]any{
 		"baseURL": config.BaseURL, "title": config.Title, "languageCode": "zh-CN", "defaultContentLanguage": "zh-cn", "hasCJKLanguage": true,
 		"paginate": 20, "pagination": map[string]any{"pagerSize": 20}, "buildDrafts": false, "buildFuture": true,
 		"taxonomies": map[string]string{"tag": "tags", "category": "categories"},
 		"params": map[string]any{
-			"mainSections": []string{"post"}, "rssFullContent": true,
+			"mainSections": []string{"post"}, "rssFullContent": true, "mdocTheme": id, "mdocTreeTheme": treeTheme,
 			"sidebar":     map[string]any{"subtitle": config.Subtitle, "avatar": map[string]any{"enabled": false}},
 			"article":     map[string]any{"toc": config.IncludeTOC, "math": true, "readingTime": true},
 			"comments":    map[string]any{"enabled": false},
@@ -464,6 +519,11 @@ func publicationHugoConfig(config publicationConfig) map[string]any {
 
 func (s *server) runPublication(ctx context.Context, root string, config publicationConfig, deploy bool) (publicationResult, error) {
 	result := publicationResult{PreviewURL: "/site/", URL: config.BaseURL}
+	resolved, resolveErr := resolveThemeConfig(config)
+	if resolveErr != nil {
+		return result, resolveErr
+	}
+	config = resolved
 	if err := validatePublicationConfig(config); err != nil {
 		return result, err
 	}
@@ -488,30 +548,14 @@ func (s *server) runPublication(ctx context.Context, root string, config publica
 	}
 	defer os.RemoveAll(stage)
 	source := filepath.Join(stage, "source")
-	if err = copyPublicationTree(s.publicationThemeDir(config), source); err != nil {
+	if err = s.prepareHugoSource(source, config); err != nil {
 		return result, err
 	}
 	if err = writePublicationJSON(filepath.Join(source, "config", "_default", "hugo.json"), publicationHugoConfig(config)); err != nil {
 		return result, err
 	}
-	// Stack exposes a footer hook; keep Mermaid code fences usable on the site.
-	if config.ThemeModule == stackModule {
-		extensions := map[string]string{
-			"layouts/_default/_markup/render-codeblock-mermaid.html": "<pre class=\"mermaid\">{{ .Inner }}</pre>{{ .Page.Store.Set \"mdocMermaid\" true }}",
-			"layouts/partials/footer/custom.html":                    `{{ if .Store.Get "mdocMermaid" }}<script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"; mermaid.initialize({startOnLoad:true,securityLevel:"strict",theme:document.documentElement.dataset.scheme === "dark" ? "dark" : "neutral"});</script>{{ end }}`,
-		}
-		for filename, content := range extensions {
-			destination := filepath.Join(source, filepath.FromSlash(filename))
-			if err = os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
-				return result, err
-			}
-			if err = os.WriteFile(destination, []byte(content), 0600); err != nil {
-				return result, err
-			}
-		}
-	}
 	// Native Hugo overrides are separate from both the app and the installed theme.
-	for _, component := range []string{"layouts", "assets", "i18n"} {
+	for _, component := range []string{"layouts", "assets", "static", "i18n", "data"} {
 		override := filepath.Join(root, "overrides", component)
 		if _, statErr := os.Stat(override); statErr == nil {
 			if err = copyPublicationTree(override, filepath.Join(source, component)); err != nil {
@@ -520,6 +564,13 @@ func (s *server) runPublication(ctx context.Context, root string, config publica
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return result, statErr
 		}
+	}
+	tree, err := s.publicationTree(docs)
+	if err != nil {
+		return result, err
+	}
+	if err = writePublicationJSON(filepath.Join(source, "data", "mdoc.json"), map[string]any{"Tree": tree, "TreeID": filepath.Base(root)}); err != nil {
+		return result, err
 	}
 	if err = s.exportPublication(source, docs); err != nil {
 		return result, err

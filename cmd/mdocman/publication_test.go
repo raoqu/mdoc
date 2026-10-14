@@ -257,6 +257,25 @@ func TestPublicationHugoIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rendered, err := scoped.renderHugoPreview(ctx, config, pathPreviewPageData{Title: "Stack preview", Markdown: "# STACK_PREVIEW_SENTINEL\n\n![local](assets/local.png)\n\n```mermaid\ngraph LR\n A --> B\n```", TreeID: "stack", Tree: []pathPreviewTreeNode{{Name: "Stack tree", URL: "/note.md"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"STACK_PREVIEW_SENTINEL", "path-tree", "Stack tree", "mdoc/tree.css", "language-mermaid", `src="assets/local.png"`} {
+		if !strings.Contains(string(rendered), expected) {
+			t.Fatalf("Stack preview missing %s", expected)
+		}
+	}
+	directoryPreview, err := scoped.renderHugoPreview(ctx, config, pathPreviewPageData{Title: "Directory", Directory: true, Entries: []pathPreviewEntry{{Name: "Start", URL: "start.md"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(directoryPreview), `href="start.md"`) {
+		t.Fatal("Stack directory listing missing local links")
+	}
+	if !strings.Contains(hugoPreviewPolicy(rendered), "'sha256-") {
+		t.Fatal("Stack inline initialization blocked by CSP")
+	}
 	if result.Documents != 2 {
 		t.Fatalf("documents = %d", result.Documents)
 	}

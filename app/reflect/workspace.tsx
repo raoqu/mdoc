@@ -35,9 +35,11 @@ import { AiSettings } from "./ai-settings";
 import { AudioMemoPanel } from "./audio-memo";
 import type { AiProviderConfig } from "./ai";
 import { ChatScreen } from "./chat-screen";
+import { normalizePinnedTree, movePinnedTree } from "./document-tree";
 import { PublicationSettings } from "./publication-settings";
 import {
   deployPublication,
+  previewPublication,
   PublicationSetupError,
   type PublicationDeployInput,
 } from "./publication-api";
@@ -344,6 +346,7 @@ export function ReflectWorkspace() {
   const [conflicts, setConflicts] = useState<Record<string, DocumentRecord>>({});
   const [notice, setNotice] = useState("");
   const [publishing, setPublishing] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const { deletionMessage, confirmDeletion, answerDeletion } = useNoteDeletionConfirmation();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteInitialQuery, setPaletteInitialQuery] = useState("");
@@ -369,7 +372,7 @@ export function ReflectWorkspace() {
   const syncTimerRef = useRef(0);
   const assetDescribeTimerRef = useRef(0);
   const launchActionHandledRef = useRef(false);
-  const publishingRef = useRef(false);
+  const publicationBusyRef = useRef(false);
   const toastTimerRef = useRef(0);
 
   const view = history[historyIndex] ?? history[0];
@@ -434,7 +437,7 @@ export function ReflectWorkspace() {
     async (knowledgeBaseName: string, openPublication = false) => {
       if (
         knowledgeBaseName === knowledgeBaseCatalog?.active ||
-        knowledgeBaseSwitching || publishingRef.current
+        knowledgeBaseSwitching || publicationBusyRef.current
       ) {
         return;
       }
@@ -475,7 +478,7 @@ export function ReflectWorkspace() {
   );
 
   const createKnowledgeBase = useCallback(async (name: string) => {
-    if (knowledgeBaseSwitching || publishingRef.current) return;
+    if (knowledgeBaseSwitching || publicationBusyRef.current) return;
     if (dirty || saving) {
       toast("笔记正在保存，请稍后再新建知识库");
       return;
@@ -839,7 +842,11 @@ export function ReflectWorkspace() {
       update: (records: NotebookRecord[]) => NotebookRecord[],
       options?: { documentIds?: readonly string[]; structural?: boolean },
     ) => {
-      setNotebooks((records) => update(records));
+      setNotebooks((records) => update(records).map((record) => {
+        const pinnedTree = normalizePinnedTree(record);
+        if (JSON.stringify(pinnedTree) !== JSON.stringify(record.pinnedTree ?? [])) structuralDirtyRef.current = true;
+        return { ...record, pinnedTree };
+      }));
       if (options?.structural === false) {
         for (const documentId of options.documentIds ?? []) {
           dirtyDocumentIdsRef.current.add(documentId);
@@ -943,14 +950,14 @@ export function ReflectWorkspace() {
   );
 
   const publishKnowledgeBase = useCallback(async (input?: PublicationDeployInput) => {
-    if (publishingRef.current) throw new Error("发布任务正在运行，请稍后重试");
+    if (publicationBusyRef.current) throw new Error("发布或预览任务正在运行，请稍后重试");
     if (dirty || saving || Object.keys(conflicts).length > 0) {
       throw new Error("请等待笔记保存完成，并先处理保存冲突");
     }
     if (!knowledgeBaseCatalog || knowledgeBaseSwitching) {
       throw new Error("请等待知识库加载或切换完成");
     }
-    publishingRef.current = true;
+    publicationBusyRef.current = true;
     setPublishing(true);
     const label = knowledgeBaseCatalog.knowledgeBases.find((item) => item.name === knowledgeBaseCatalog.active)?.label ?? "当前知识库";
     try {
@@ -963,8 +970,45 @@ export function ReflectWorkspace() {
       if (error instanceof PublicationSetupError) navigate({ kind: "settings", section: "publish" });
       throw error;
     } finally {
-      publishingRef.current = false;
+      publicationBusyRef.current = false;
       setPublishing(false);
+    }
+  }, [conflicts, dirty, knowledgeBaseCatalog, knowledgeBaseSwitching, navigate, saving, toast]);
+
+  const previewKnowledgeBase = useCallback(async () => {
+    if (publicationBusyRef.current) return;
+    if (dirty || saving || Object.keys(conflicts).length > 0) {
+      toast("请等待笔记保存完成，并先处理保存冲突");
+      return;
+    }
+    if (!knowledgeBaseCatalog || knowledgeBaseSwitching) {
+      toast("请等待知识库加载或切换完成");
+      return;
+    }
+    // Open synchronously with the click so browsers allow the new preview tab.
+    const previewWindow = window.open("", "_blank");
+    if (!previewWindow) {
+      toast("请允许浏览器打开新窗口后再预览知识库");
+      return;
+    }
+    previewWindow.opener = null;
+    previewWindow.document.title = "正在生成知识库预览";
+    previewWindow.document.body.textContent = "正在生成知识库预览…";
+    publicationBusyRef.current = true;
+    setPreviewing(true);
+    const label = knowledgeBaseCatalog.knowledgeBases.find((item) => item.name === knowledgeBaseCatalog.active)?.label ?? "当前知识库";
+    try {
+      const preview = await previewPublication();
+      if (!previewWindow.closed) previewWindow.location.replace(new URL(preview.status.previewURL, window.location.origin).href);
+      toast(`${label}预览已生成，共 ${preview.result.documents} 篇文档`);
+    } catch (error) {
+      previewWindow.close();
+      const message = error instanceof Error ? error.message : String(error);
+      toast(`预览失败：${message.split("\n")[0].slice(0, 160)}`);
+      if (error instanceof PublicationSetupError) navigate({ kind: "settings", section: "publish" });
+    } finally {
+      publicationBusyRef.current = false;
+      setPreviewing(false);
     }
   }, [conflicts, dirty, knowledgeBaseCatalog, knowledgeBaseSwitching, navigate, saving, toast]);
 
@@ -2272,7 +2316,7 @@ export function ReflectWorkspace() {
           {activeSection === "publish" ? (
             <PublicationSettings key={knowledgeBaseCatalog?.active ?? "default"}
               knowledgeBaseLabel={knowledgeBaseCatalog?.knowledgeBases.find((item) => item.name === knowledgeBaseCatalog.active)?.label ?? "当前知识库"}
-              publishing={publishing} onPublish={publishKnowledgeBase}
+              publishing={publishing || previewing} onPublish={publishKnowledgeBase}
               pendingSave={dirty || saving || Object.keys(conflicts).length > 0} onNotice={toast} />
           ) : null}
 
@@ -2384,12 +2428,17 @@ export function ReflectWorkspace() {
           notebook={notebook}
           notebooks={notebooks}
           knowledgeBaseCatalog={knowledgeBaseCatalog}
-          knowledgeBaseSwitching={knowledgeBaseSwitching || publishing}
+          knowledgeBaseSwitching={knowledgeBaseSwitching || publishing || previewing}
           publishing={publishing}
+          previewing={previewing}
           publishDisabled={!loaded || !knowledgeBaseCatalog || knowledgeBaseSwitching || dirty || saving || Object.keys(conflicts).length > 0}
           publishDisabledReason={Object.keys(conflicts).length > 0 ? "请先处理笔记保存冲突" : dirty || saving ? "请等待笔记保存完成" : "请等待知识库加载或切换完成"}
           onPublish={() => void publishKnowledgeBase().catch(() => {})}
+          onPreview={() => void previewKnowledgeBase()}
           documents={documents}
+          treeDisabled={!loaded || saving || knowledgeBaseSwitching || publishing || previewing || Object.keys(conflicts).length > 0}
+          onUnpin={(id) => patchDocument(id, { pinned: false })}
+          onMovePinned={(id, target, placement) => mutateNotebooks((records) => records.map((record) => record.id === notebook.id ? { ...record, pinnedTree: movePinnedTree(normalizePinnedTree(record), id, target, placement) } : record))}
           view={view}
           onNavigate={navigate}
           onSearch={() => setPaletteOpen(true)}
@@ -2419,7 +2468,7 @@ export function ReflectWorkspace() {
             void changeKnowledgeBaseColor(color);
           }}
           onKnowledgeBaseCreate={() => {
-            if (publishingRef.current) return;
+            if (publicationBusyRef.current) return;
             if (dirty || saving) {
               toast("笔记正在保存，请稍后再新建知识库");
               return;

@@ -1,0 +1,1 @@
+{{ with .Site.Data.mdoc.Tree }}<aside class="path-tree" data-path-tree-id="{{ $.Site.Data.mdoc.TreeID }}" aria-label="文档目录"><nav class="tree-theme-{{ $.Site.Params.mdocTreeTheme }}">{{ partial "mdoc/tree-nodes.html" (dict "Nodes" . "Page" $) }}</nav></aside>{{ end }}

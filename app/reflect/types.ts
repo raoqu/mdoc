@@ -25,6 +25,12 @@ export interface NotebookRecord {
   description: string;
   accent: string;
   folders: FolderRecord[];
+  pinnedTree?: DocumentTreeNode[];
+}
+
+export interface DocumentTreeNode {
+  id: string;
+  children?: DocumentTreeNode[];
 }
 
 export interface DocumentLocation {

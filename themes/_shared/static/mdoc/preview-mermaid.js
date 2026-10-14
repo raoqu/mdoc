@@ -40,7 +40,7 @@ if (nodes.length === 0) {
   // Nothing to render.
 } else {
   const theme =
-    document.documentElement.dataset.previewTheme === "dark" ? "dark" : "neutral";
+    (document.documentElement.dataset.previewTheme === "dark" || document.documentElement.dataset.scheme === "dark") ? "dark" : "neutral";
   mermaid.initialize({
     startOnLoad: false,
     theme,

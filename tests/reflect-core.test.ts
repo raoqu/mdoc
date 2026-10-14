@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatPublicationTarget, parsePublicationTarget } from "../app/reflect/publication-target";
-import { deployPublication, PublicationSetupError, type PublicationStatus } from "../app/reflect/publication-api";
+import { deployPublication, previewPublication, PublicationSetupError, type PublicationStatus } from "../app/reflect/publication-api";
 import { isEmptyNewNoteDraft, mergeNewNoteDrafts, notebooksWithSavableDrafts, UNTITLED_NOTE_TITLE } from "../app/reflect/note-drafts";
+import { normalizePinnedTree, movePinnedTree } from "../app/reflect/document-tree";
 import { documentsInNotebook, type NotebookRecord } from "../app/reflect/types";
 import { noteDeletionConfirmation } from "../app/reflect/note-deletion";
 import {
@@ -515,6 +516,36 @@ test("quick publication uses saved settings and pins the deployment to their kno
   assert.equal(new Headers(requests[1].init?.headers).get("X-Mdoc-Publication-Directory"), status.directory);
 });
 
+test("knowledge base preview builds without a deployment target and pins its knowledge base", async (t) => {
+  const status = publicationStatusFixture();
+  status.config.deployTarget = "";
+  const requests: { url: string; init?: RequestInit }[] = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+    requests.push({ url, init });
+    return Response.json(url === "/api/publication" ? status : { documents: 4, log: "Preview built" });
+  });
+  const preview = await previewPublication();
+  assert.equal(preview.result.documents, 4);
+  assert.equal(preview.status.previewURL, "/site/");
+  assert.deepEqual(requests.map((request) => [request.url, request.init?.method ?? "GET"]), [
+    ["/api/publication", "GET"], ["/api/publication/build", "POST"],
+  ]);
+  assert.equal(new Headers(requests[1].init?.headers).get("X-Mdoc-Publication-Directory"), status.directory);
+});
+
+test("knowledge base preview reports missing themes and build failures", async (t) => {
+  const status = publicationStatusFixture();
+  status.themeInstalled = false;
+  const request = t.mock.method(globalThis, "fetch", async () => Response.json(status));
+  await assert.rejects(previewPublication(), PublicationSetupError);
+  assert.equal(request.mock.calls.length, 1);
+  status.themeInstalled = true;
+  request.mock.mockImplementation(async (url: string) => url === "/api/publication"
+    ? Response.json(status)
+    : new Response("Knowledge base switched\n", { status: 409 }));
+  await assert.rejects(previewPublication(), /Knowledge base switched/);
+});
+
 test("settings publication saves the edited target before deployment", async (t) => {
   const status = publicationStatusFixture();
   status.config.deployTarget = "deploy@192.0.2.20:/var/www/other/";
@@ -547,4 +578,30 @@ test("publication failures propagate the server reason for the completion notice
     ? Response.json(status)
     : new Response("SSH connection failed\n", { status: 500 }));
   await assert.rejects(deployPublication(), /SSH connection failed/);
+});
+
+
+test("pinned navigation reorders and nests whole subtrees without cycles", () => {
+  const tree = [{ id: "a", children: [{ id: "b" }] }, { id: "c" }, { id: "d" }];
+  assert.deepEqual(movePinnedTree(tree, "a", "b", "inside"), tree);
+  assert.deepEqual(movePinnedTree(tree, "a", "missing", "inside"), tree);
+  const nested = movePinnedTree(tree, "a", "c", "inside");
+  assert.equal(nested[0].id, "c");
+  assert.equal(nested[0].children?.[0].children?.[0].id, "b");
+  const promoted = movePinnedTree(nested, "a", "c", "after");
+  assert.deepEqual(promoted.map((node) => node.id), ["c", "a", "d"]);
+  assert.deepEqual(movePinnedTree(tree, "a", null, "inside").map((node) => node.id), ["c", "d", "a"]);
+});
+
+test("deleting or unpinning a parent promotes children in place and preserves their subtrees", () => {
+  const book: NotebookRecord = {
+    id: "book", title: "Book", description: "", accent: "",
+    folders: [{ id: "folder", title: "Notes", open: true, children: [], docs: ["a", "b", "c", "d", "new"].map((id) => ({ id, title: id, content: "", updatedAt: "", revision: 0, pinned: true, trashed: id === "a" })) }],
+    pinnedTree: [{ id: "a", children: [{ id: "b", children: [{ id: "c" }] }] }, { id: "d" }],
+  };
+  assert.deepEqual(normalizePinnedTree(book), [{ id: "b", children: [{ id: "c" }] }, { id: "d" }, { id: "new" }]);
+  book.folders[0].docs[1].pinned = false;
+  assert.deepEqual(normalizePinnedTree(book), [{ id: "c" }, { id: "d" }, { id: "new" }]);
+  book.folders[0].docs = book.folders[0].docs.filter((doc) => !["a", "b"].includes(doc.id));
+  assert.deepEqual(normalizePinnedTree(book), [{ id: "c" }, { id: "d" }, { id: "new" }]);
 });

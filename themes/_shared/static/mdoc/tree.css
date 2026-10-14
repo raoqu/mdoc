@@ -1,0 +1,149 @@
+:root { --tree-width: 240px; --tree-indent: 14px; --tree-font-size: 13px; }
+.path-tree {
+  position: sticky;
+  top: 0;
+  box-sizing: border-box;
+  height: 100vh;
+  align-self: flex-start;
+  overflow: auto;
+  padding-top: 52px !important;
+}
+
+.path-tree-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path-tree ul ul {
+  padding-left: 14px;
+}
+
+.path-tree li {
+  margin: 2px 0;
+}
+
+.path-tree-directory-row {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.path-tree-directory-fold > summary {
+  padding: 6px 7px;
+  border-radius: 5px;
+  color: var(--preview-muted-text);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.path-tree-directory-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.path-tree-directory-fold > summary::before {
+  display: inline-block;
+  width: 13px;
+  content: "›";
+  transition: transform 0.15s;
+}
+
+.path-tree-directory-fold[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.path-tree-directory-toggle {
+  flex: 0 0 20px;
+}
+
+.path-tree-directory-toggle > summary {
+  display: grid;
+  box-sizing: border-box;
+  width: 20px;
+  height: 100%;
+  min-height: 31px;
+  padding: 6px 4px;
+  border-radius: 5px;
+  color: var(--preview-muted-text);
+  list-style: none;
+  place-items: center;
+  cursor: pointer;
+}
+
+.path-tree-directory-toggle > summary::-webkit-details-marker {
+  display: none;
+}
+
+.path-tree-directory-toggle > summary::before {
+  display: inline-block;
+  content: "›";
+  transition: transform 0.15s;
+}
+
+.path-tree-directory-toggle[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.path-tree-directory-fold > summary:hover,
+.path-tree-directory-toggle > summary:hover,
+.path-tree a:hover,
+.directory-list a:hover {
+  background: var(--preview-surface);
+  text-decoration: none;
+}
+
+.path-tree-directory-toggle-spacer {
+  flex: 0 0 20px;
+}
+
+.path-tree-directory-name,
+.path-tree-directory-link {
+  display: block;
+  min-width: 0;
+  flex: 1;
+  padding: 6px 7px 6px 0;
+  overflow: hidden;
+  border-radius: 5px;
+  color: var(--preview-muted-text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-tree-directory:has(> .path-tree-directory-row > .path-tree-directory-toggle:not([open])) > ul {
+  display: none;
+}
+
+.path-tree a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-tree a.active {
+  color: var(--preview-link);
+  background: var(--preview-surface-strong);
+  font-weight: 600;
+}
+
+
+.path-tree, .layout > .path-tree { width: var(--tree-width); flex: none; padding: 36px 18px; color: var(--preview-muted-text, var(--body-text-color, #626772)); font: var(--tree-font-size)/1.5 system-ui, sans-serif; border-right: 1px solid var(--preview-border, #ddd); }
+.path-tree ul ul { padding-left: var(--tree-indent); }
+.path-tree a { display: block; padding: 6px 7px; border-radius: 5px; color: inherit; text-decoration: none; }
+.path-tree a.active { color: var(--preview-link, var(--accent-color, #45604a)); background: var(--preview-surface-strong, var(--card-background, #e4e9e2)); }
+.path-tree-directory-link { padding-left: 0 !important; }
+.tree-theme-compact { --tree-indent: 10px; --tree-font-size: 12px; }
+.tree-theme-compact a, .tree-theme-compact summary { padding-top: 3px; padding-bottom: 3px; }
+.mdoc-tree-mobile { display: none; }
+@media (max-width: 760px) {
+  .path-tree { display: none; }
+  .mdoc-tree-mobile { display: block; padding: 12px 20px; }
+  .mdoc-tree-mobile .path-tree { display: block; position: static; width: auto; height: auto; max-height: 55vh; padding: 12px 0 !important; border: 0; }
+}

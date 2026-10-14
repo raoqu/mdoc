@@ -6,6 +6,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Eye,
   FilePlus2,
   Files,
   FolderOpen,
@@ -21,6 +22,8 @@ import {
   Tag,
   Trash2,
 } from "lucide-react";
+import { PinnedDocumentTree } from "./pinned-document-tree";
+import type { TreePlacement } from "./document-tree";
 import { allTags, localDateKey } from "./markdown";
 import type {
   DocumentLocation,
@@ -46,6 +49,7 @@ interface WorkspaceSidebarProps {
   knowledgeBaseCatalog: KnowledgeBaseCatalog | null;
   knowledgeBaseSwitching: boolean;
   publishing: boolean;
+  previewing: boolean;
   publishDisabled: boolean;
   publishDisabledReason: string;
   documents: readonly DocumentLocation[];
@@ -62,10 +66,14 @@ interface WorkspaceSidebarProps {
   onKnowledgeBaseChange: (knowledgeBaseName: string) => void;
   onKnowledgeBasePublication: (knowledgeBaseName: string) => void;
   onPublish: () => void;
+  onPreview: () => void;
   onKnowledgeBaseColorChange: (color: string) => void;
   onKnowledgeBaseCreate: () => void;
   onKnowledgeBaseReveal: () => void;
   onAudioMemo: () => void;
+  onMovePinned: (id: string, target: string | null, placement: TreePlacement) => void;
+  onUnpin: (id: string) => void;
+  treeDisabled: boolean;
 }
 
 const KNOWLEDGE_BASE_COLORS = [
@@ -89,6 +97,7 @@ export function WorkspaceSidebar({
   knowledgeBaseCatalog,
   knowledgeBaseSwitching,
   publishing,
+  previewing,
   publishDisabled,
   publishDisabledReason,
   documents,
@@ -105,15 +114,18 @@ export function WorkspaceSidebar({
   onKnowledgeBaseChange,
   onKnowledgeBasePublication,
   onPublish,
+  onPreview,
   onKnowledgeBaseColorChange,
   onKnowledgeBaseCreate,
   onKnowledgeBaseReveal,
   onAudioMemo,
+  onMovePinned,
+  onUnpin,
+  treeDisabled,
 }: WorkspaceSidebarProps) {
   const [knowledgeBaseMenuOpen, setKnowledgeBaseMenuOpen] = useState(false);
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const knowledgeBaseMenuRef = useRef<HTMLDivElement>(null);
-  const pinned = documents.filter(({ document }) => document.pinned && !document.trashed);
   const tags = allTags(documents).slice(0, 8);
   const activeKnowledgeBase = knowledgeBaseCatalog?.knowledgeBases.find(
     (knowledgeBase) => knowledgeBase.name === knowledgeBaseCatalog.active,
@@ -158,12 +170,23 @@ export function WorkspaceSidebar({
           type="button"
           className={`sidebar-publish-button ${publishing ? "publishing" : ""}`}
           onClick={onPublish}
-          disabled={publishing || publishDisabled}
-          title={publishing ? `正在发布${activeKnowledgeBaseLabel}…` : publishDisabled ? publishDisabledReason : `发布${activeKnowledgeBaseLabel}`}
+          disabled={publishing || previewing || publishDisabled}
+          title={publishing ? `正在发布${activeKnowledgeBaseLabel}…` : previewing ? "正在生成知识库预览，请稍候" : publishDisabled ? publishDisabledReason : `发布${activeKnowledgeBaseLabel}`}
           aria-label={publishing ? "正在发布知识库" : "发布当前知识库"}
           aria-busy={publishing}
         >
           {publishing ? <LoaderCircle className="sidebar-publish-spinner" size={17} /> : <Globe size={17} />}
+        </button>
+        <button
+          type="button"
+          className={`sidebar-preview-button ${previewing ? "previewing" : ""}`}
+          onClick={onPreview}
+          disabled={publishing || previewing || publishDisabled}
+          title={previewing ? `正在生成${activeKnowledgeBaseLabel}预览…` : publishing ? "正在发布知识库，请稍候" : publishDisabled ? publishDisabledReason : `预览${activeKnowledgeBaseLabel}`}
+          aria-label={previewing ? "正在生成知识库预览" : "预览当前知识库"}
+          aria-busy={previewing}
+        >
+          {previewing ? <LoaderCircle className="sidebar-publish-spinner" size={17} /> : <Eye size={17} />}
         </button>
         <span className="sidebar-topline-spacer" />
         <button
@@ -247,28 +270,7 @@ export function WorkspaceSidebar({
         </button>
       </nav>
 
-      {pinned.length > 0 ? (
-        <section className="sidebar-section">
-          <h3>已固定</h3>
-          {pinned.map(({ document }) => (
-            <button
-              type="button"
-              key={document.id}
-              className={
-                view.kind === "note" && view.documentId === document.id
-                  ? "active"
-                  : ""
-              }
-              onClick={() =>
-                onNavigate({ kind: "note", documentId: document.id })
-              }
-            >
-              <span className="note-dot" />
-              <span>{document.title}</span>
-            </button>
-          ))}
-        </section>
-      ) : null}
+      <PinnedDocumentTree key={knowledgeBaseCatalog?.active + notebook.id} notebook={notebook} documents={documents} activeId={view.kind === "note" ? view.documentId : undefined} disabled={treeDisabled} onOpen={(documentId) => onNavigate({ kind: "note", documentId })} onUnpin={onUnpin} onMove={onMovePinned} />
 
       {tags.length > 0 ? (
         <section className="sidebar-section sidebar-tags">

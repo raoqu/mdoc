@@ -1,0 +1,10 @@
+.left-sidebar .path-tree { position: static; height: auto; max-height: 65vh; width: 100%; border: 0; padding: 12px 0 !important; }
+:root { --preview-background: var(--body-background); --preview-accent: var(--accent-color); --preview-muted-text: var(--body-text-color); --preview-text: var(--body-text-color); --preview-link: var(--accent-color); --preview-border: var(--card-separator-color); --preview-surface: var(--card-background); --preview-surface-strong: var(--card-background); }
+.theme-switcher { position: fixed; top: 16px; right: 20px; z-index: 30; }
+.theme-toggle, .theme-menu-item { cursor: pointer; color: var(--body-text-color); background: var(--card-background); border: 0; padding: 8px 12px; border-radius: 8px; }
+.theme-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; }
+.theme-menu { position: absolute; right: 0; min-width: 160px; background: var(--card-background); padding: 6px; border-radius: 10px; }
+.theme-menu-item { display: flex; width: 100%; justify-content: space-between; }
+.theme-menu-check { visibility: hidden; }.theme-menu-item[aria-checked=true] .theme-menu-check { visibility: visible; }
+@media (max-width: 760px) { .container > .mdoc-tree-mobile { position: relative; order: -2; width: 100%; padding: 0 0 8px; } }
+
