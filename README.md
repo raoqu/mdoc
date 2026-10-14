@@ -61,19 +61,35 @@ MDOC_SEMANTIC_MODEL_DIR=/path/to/Qdrant-all-MiniLM-L6-v2-onnx ./mdoc
 ./dev.sh ./docs
 ```
 
-生产构建与清理：
+生产构建支持两种模式：
 
 ```bash
-./build.sh
-./clean.sh
+./build.sh              # 默认 cli：内嵌前端的独立可执行文件
+./build.sh cli          # 显式选择 CLI 模式
+./build.sh split        # 前后端分离，供 Electron 等桌面壳集成
+./build.sh electron     # split 的别名
 ```
 
-构建会在项目根目录生成 `./mdoc`，其中已经内嵌预渲染首页和全部浏览器资源。
-部署管理端时只需复制这一个二进制文件，运行后访问 `http://localhost:8080/`；
-无需额外部署前端目录，也不需要在运行机器上安装 Node.js。`dev.sh` 仍使用独立的
-Vinext 开发服务器和 HMR，不受生产内嵌方式影响。
+CLI 模式在项目根目录生成 `./mdoc`，其中已经内嵌预渲染首页和全部浏览器资源。
+部署管理端时只需复制这一个二进制文件。运行后在监听成功时自动打开默认浏览器，
+访问 `http://localhost:2026/`（支持 macOS、Windows 和 Linux）；
+无需额外部署前端目录，也不需要在运行机器上安装 Node.js。
+可通过 `API_PORT` 指定端口，浏览器会访问实际监听的端口；通过
+`MDOC_NO_BROWSER=1 ./mdoc` 禁止自动打开浏览器。端口占用时程序报错退出；
+无法启动浏览器时保留服务并输出可手动访问的地址。
 
-构建还会生成 `mdocman-site`，它是无数据库依赖的只读发布端。文档站默认通过
+分离模式生成 `dist/frontend/`（预渲染首页和浏览器资源）与
+`dist/bin/mdocman`（使用 `extended,noembed` 构建的 Go 后端）。后端不嵌入或提供
+管理端前端，默认监听 `2026`，可通过 `API_PORT` 指定端口。Electron 等桌面壳
+需要启动该后端，通过 HTTP 服务或自定义协议提供前端资源，并将 `/api`、
+`/_mdoc`、`/uploads`、`/audio`、`/site`、`/s` 的请求代理到后端。前端使用根路径
+资源和相对 API 地址，不能直接通过 `file://` 加载。本脚本生成集成所需产物，
+Electron 安装包由桌面壳的打包流程生成。
+
+`./dev.sh` 仍使用独立的 Vinext 开发服务器和 HMR。`./clean.sh` 用于清理构建产物
+与开发缓存。
+
+两种模式均生成 `dist/bin/mdocman-site`，它是无数据库依赖的只读发布端。文档站默认通过
 内置 Hugo Extended 源码引擎 + Stack v3.31.0 构建，由远端 Caddy 托管。Hugo 运行时源码位于 `third_party/hugo/`，编译进 `mdoc`，无需另装 Hugo。
 发布主题单独安装；只有
 frontmatter 标记为 `publish: true` 且非私密、非回收站、非草稿的文档进入站点。

@@ -481,6 +481,10 @@ func openBrowser(target string) error {
 	if err := command.Start(); err != nil {
 		return err
 	}
-	go func() { _ = command.Wait() }()
+	go func() {
+		if err := command.Wait(); err != nil {
+			log.Printf("无法自动打开浏览器，请手动访问 %s：%v", target, err)
+		}
+	}()
 	return nil
 }

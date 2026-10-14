@@ -1,30 +1,14 @@
 package main
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
 )
 
-// build.sh temporarily copies the prerendered Vinext application into this
-// directory before compiling. Keeping the directory itself in git also lets
-// ordinary `go test` and `go run` commands work without a production build.
-//
-//go:embed all:frontend_dist
-var embeddedFrontend embed.FS
-
 type frontendHandler struct {
 	files fs.FS
-}
-
-func embeddedFrontendHandler() http.Handler {
-	files, err := fs.Sub(embeddedFrontend, "frontend_dist")
-	if err != nil {
-		return http.NotFoundHandler()
-	}
-	return newFrontendHandler(files)
 }
 
 func newFrontendHandler(files fs.FS) http.Handler {

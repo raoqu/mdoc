@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-API_PORT="${API_PORT:-8080}"
+API_PORT="${API_PORT:-2026}"
 export API_PORT
 
 # Make the development contract explicit even when the caller's shell exports

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1042,7 +1043,7 @@ func main() {
 	}
 	port := os.Getenv("API_PORT")
 	if port == "" {
-		port = "8080"
+		port = "2026"
 	}
 	http.HandleFunc("/api/knowledge-bases", cors(s.knowledgeBaseCatalog))
 	http.HandleFunc("/api/knowledge-bases/reveal", cors(s.revealKnowledgeBase))
@@ -1083,6 +1084,16 @@ func main() {
 	http.HandleFunc("/site/", s.publicationPreview)
 	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
 	http.Handle("/", embeddedFrontendHandler())
-	fmt.Printf("Mdocman API: http://localhost:%s\n知识库目录: %s\n当前知识库: %s\n", port, workspaceDir, knowledgeBaseLabel(databases.activeName()))
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		log.Fatal(err)
+	}
+	appURL := fmt.Sprintf("http://localhost:%d/", listener.Addr().(*net.TCPAddr).Port)
+	fmt.Printf("Mdocman API: %s\n知识库目录: %s\n当前知识库: %s\n", appURL, workspaceDir, knowledgeBaseLabel(databases.activeName()))
+	if hasEmbeddedFrontend() && os.Getenv("MDOC_NO_BROWSER") == "" {
+		if err := openBrowser(appURL); err != nil {
+			log.Printf("无法自动打开浏览器，请手动访问 %s：%v", appURL, err)
+		}
+	}
+	log.Fatal(http.Serve(listener, nil))
 }

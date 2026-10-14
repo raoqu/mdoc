@@ -1,4 +1,4 @@
-const API = "http://127.0.0.1:8080/api/capture";
+const API = "http://127.0.0.1:2026/api/capture";
 
 async function state() {
   return chrome.storage.local.get({ token: "", queue: [] });

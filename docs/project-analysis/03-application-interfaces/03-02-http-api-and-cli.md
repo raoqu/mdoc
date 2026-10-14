@@ -54,7 +54,9 @@ main
 → cliRequested
 → 若命令已处理则退出
 → 注册 handler
-→ ListenAndServe
+→ net.Listen 成功后输出实际监听地址
+→ 内嵌前端可用时自动打开默认浏览器
+→ http.Serve
 ```
 
 Web 开发服务器将后端相关路径代理到 `127.0.0.1:${API_PORT}`；生产二进制由 Go 同源提供前端和 API。
@@ -65,8 +67,9 @@ Web 开发服务器将后端相关路径代理到 `127.0.0.1:${API_PORT}`；生�
 
 ## 9. 配置项
 
-- `API_PORT` 默认 `8080`。
-- HTTP 服务地址由 `http.ListenAndServe(":"+port)` 决定。
+- `API_PORT` 默认 `2026`。
+- HTTP 服务地址由 `net.Listen("tcp", ":"+port)` 决定；端口为 `0` 时，输出和浏览器使用实际分配的端口。
+- 内嵌前端可用且未设置 `MDOC_NO_BROWSER` 时，监听成功后自动打开浏览器；macOS 使用 `open`，Windows 使用 `rundll32`，Linux 使用 `xdg-open`。分离模式和未构建前端的开发运行不触发此行为。
 - 上传和音频请求限制为 32 MiB，捕获限制为 16 MiB，预览表单限制为 8 MiB。
 - CORS 允许 `*` Origin、`Content-Type/Authorization` 和常用写方法。
 

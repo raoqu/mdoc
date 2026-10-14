@@ -64,7 +64,7 @@ Chrome 活动页
 ## 9. 配置项
 
 - 路径预览默认选择随机可用端口；显式 `MDOC_PORT` 可固定。
-- 扩展 API 地址固定为 `127.0.0.1:8080`。
+- 扩展 API 地址固定为 `127.0.0.1:2026`。
 - 截图最大 12 MiB，整体捕获请求最大 16 MiB。
 - 扩展拥有 `activeTab`、`scripting`、`storage`、`alarms` 和本地端口 host permission。
 

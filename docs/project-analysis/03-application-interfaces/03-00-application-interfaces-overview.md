@@ -64,7 +64,7 @@
 - `API_PORT` 控制管理服务端口。
 - `MDOC_PORT` 和 `MDOC_NO_BROWSER` 控制路径预览。
 - Vite `server.proxy` 定义开发时后端路径。
-- Chrome 扩展当前把 API 地址固定为 `http://127.0.0.1:8080/api/capture`。
+- Chrome 扩展当前把 API 地址固定为 `http://127.0.0.1:2026/api/capture`。
 - 新接口需同时更新 `main` 路由注册、handler、前端调用和必要的 CORS/大小限制。
 
 ## 10. 代码入口

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "将当前页面、选区和截图排队保存到本机墨笺知识库。",
   "permissions": ["activeTab", "scripting", "storage", "alarms"],
-  "host_permissions": ["http://127.0.0.1:8080/*"],
+  "host_permissions": ["http://127.0.0.1:2026/*"],
   "background": { "service_worker": "service-worker.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "捕获到墨笺" },
   "commands": {

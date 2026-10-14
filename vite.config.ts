@@ -48,7 +48,7 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
-  const apiTarget = `http://127.0.0.1:${process.env.API_PORT || "8080"}`;
+  const apiTarget = `http://127.0.0.1:${process.env.API_PORT || "2026"}`;
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
