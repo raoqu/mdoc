@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DayCalendar } from "../app/reflect/day-calendar";
 import { formatPublicationTarget, parsePublicationTarget } from "../app/reflect/publication-target";
 import { deployPublication, previewPublication, PublicationSetupError, type PublicationStatus } from "../app/reflect/publication-api";
 import { isEmptyNewNoteDraft, mergeNewNoteDrafts, notebooksWithSavableDrafts, UNTITLED_NOTE_TITLE } from "../app/reflect/note-drafts";
@@ -349,6 +352,32 @@ test("month grid pads full Monday-first weeks and labels months", () => {
     date: "2026-08-01",
     inMonth: true,
   });
+});
+
+test("calendar hydration uses its date snapshot across time zones and old prerenders", (context) => {
+  context.mock.timers.enable({
+    apis: ["Date"],
+    now: Date.parse("2026-10-15T16:30:00Z"),
+  });
+  const previousTimezone = process.env.TZ;
+  try {
+    const renderCalendar = () => renderToStaticMarkup(createElement(DayCalendar, {
+      today: "2026-10-14",
+      selectedDate: "2026-10-14",
+      notedDates: new Set<string>(),
+      onSelectDate() {},
+      onToday() {},
+    }));
+    process.env.TZ = "UTC";
+    const serverHtml = renderCalendar();
+    process.env.TZ = "Asia/Shanghai";
+    const clientHtml = renderCalendar();
+    assert.equal(clientHtml, serverHtml);
+    assert.match(clientHtml, /aria-label="2026年10月14日星期三" aria-current="date" aria-pressed="true"/);
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  }
 });
 
 test("daily dates are collected from non-trashed daily note ids", () => {

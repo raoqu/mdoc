@@ -332,7 +332,7 @@ function normalizeNotebookMetadata(
   };
 }
 
-export function ReflectWorkspace() {
+export function ReflectWorkspace({ initialDate }: { initialDate: string }) {
   const [notebooks, setNotebooks] = useState<NotebookRecord[]>([WELCOME_NOTEBOOK]);
   const [notebookId, setNotebookId] = useState(WELCOME_NOTEBOOK.id);
   const [knowledgeBaseCatalog, setKnowledgeBaseCatalog] =
@@ -358,8 +358,9 @@ export function ReflectWorkspace() {
   const [aiProviders, setAiProviders] = useState<AiProviderConfig[]>([]);
   const [templates, setTemplates] = useState<StoredTemplate[]>([]);
   const [syncConfig, setSyncConfig] = useState<SyncConfig>({ status: "disconnected" });
+  const [hydrated, setHydrated] = useState(false);
   const [history, setHistory] = useState<WorkspaceView[]>([
-    { kind: "daily", date: localDateKey() },
+    { kind: "daily", date: initialDate },
   ]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const editorRef = useRef<ReflectEditorHandle>(null);
@@ -375,6 +376,7 @@ export function ReflectWorkspace() {
   const publicationBusyRef = useRef(false);
   const toastTimerRef = useRef(0);
 
+  const today = hydrated ? localDateKey() : initialDate;
   const view = history[historyIndex] ?? history[0];
   const notebook =
     notebooks.find((candidate) => candidate.id === notebookId) ??
@@ -415,7 +417,14 @@ export function ReflectWorkspace() {
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => setSettings(loadSettings()));
+    queueMicrotask(() => {
+      // Hydrate with the server's date snapshot before using the browser's
+      // local day. Prerendered pages may also have been built on an earlier day.
+      const date = localDateKey();
+      setSettings(loadSettings());
+      setHydrated(true);
+      setHistory([{ kind: "daily", date }]);
+    });
     fetch("/api/notebooks")
       .then(async (response) => {
         if (!response.ok) {
@@ -1953,6 +1962,7 @@ export function ReflectWorkspace() {
             {isDaily ? (
               <DayCalendar
                 key={view.date}
+                today={today}
                 selectedDate={view.date}
                 notedDates={notedDailyDates}
                 onSelectDate={(date) => navigate({ kind: "daily", date })}

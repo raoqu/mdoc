@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactElement } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
-import { formatDailyTitle, localDateKey } from "./markdown";
+import { formatDailyTitle } from "./markdown";
 import {
   addMonths,
   buildMonthGrid,
@@ -12,6 +12,8 @@ import {
 } from "./month-grid";
 
 export interface DayCalendarProps {
+  /** Today's date, shared with the workspace's initial server snapshot. */
+  today: string;
   /** Currently selected daily date (`YYYY-MM-DD`). */
   selectedDate: string;
   /** ISO dates that already have a daily note. */
@@ -29,12 +31,12 @@ export interface DayCalendarProps {
  * hovers the calendar.
  */
 export function DayCalendar({
+  today,
   selectedDate,
   notedDates,
   onSelectDate,
   onToday,
 }: DayCalendarProps): ReactElement {
-  const today = localDateKey();
   const [month, setMonth] = useState(() => monthOf(selectedDate));
 
   const grid = useMemo(() => buildMonthGrid(month, 1), [month]);
