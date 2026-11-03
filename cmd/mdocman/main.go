@@ -1064,6 +1064,24 @@ func main() {
 		}
 		return
 	}
+	// Reserve the port before migrations or opening SQLite. A second launch must
+	// leave the running workspace (including its active database) untouched.
+	var listener net.Listener
+	if len(os.Args) == 1 || os.Args[1] == "serve" {
+		port := strings.TrimSpace(os.Getenv("API_PORT"))
+		if port == "" {
+			port = "2026"
+		}
+		var err error
+		listener, err = listenWorkspace(port, os.Stdout, openWorkspaceBrowser)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if listener == nil {
+			return
+		}
+		defer listener.Close()
+	}
 	workspaceDir, e := defaultWorkspaceDirectory()
 	if e != nil {
 		log.Fatal(e)
@@ -1086,10 +1104,6 @@ func main() {
 	}
 	if cliRequested(s) {
 		return
-	}
-	port := os.Getenv("API_PORT")
-	if port == "" {
-		port = "2026"
 	}
 	http.HandleFunc("/api/knowledge-bases", cors(s.knowledgeBaseCatalog))
 	http.HandleFunc("/api/knowledge-bases/reveal", cors(s.revealKnowledgeBase))
@@ -1132,16 +1146,8 @@ func main() {
 	http.HandleFunc("/site/", s.publicationPreview)
 	http.Handle("/s/", http.StripPrefix("/s/", http.FileServer(http.Dir("public-site/s"))))
 	http.Handle("/", embeddedFrontendHandler())
-	listener, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		log.Fatal(err)
-	}
 	appURL := fmt.Sprintf("http://localhost:%d/", listener.Addr().(*net.TCPAddr).Port)
 	fmt.Printf("Mdocman API: %s\n知识库目录: %s\n当前知识库: %s\n", appURL, workspaceDir, knowledgeBaseLabel(databases.activeName()))
-	if hasEmbeddedFrontend() && os.Getenv("MDOC_NO_BROWSER") == "" {
-		if err := openBrowser(appURL); err != nil {
-			log.Printf("无法自动打开浏览器，请手动访问 %s：%v", appURL, err)
-		}
-	}
+	openWorkspaceBrowser(appURL)
 	log.Fatal(http.Serve(listener, nil))
 }

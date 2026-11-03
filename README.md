@@ -75,8 +75,12 @@ CLI 模式在项目根目录生成 `./mdoc`，其中已经内嵌预渲染首页�
 访问 `http://localhost:2026/`（支持 macOS、Windows 和 Linux）；
 无需额外部署前端目录，也不需要在运行机器上安装 Node.js。
 可通过 `API_PORT` 指定端口，浏览器会访问实际监听的端口；通过
-`MDOC_NO_BROWSER=1 ./mdoc` 禁止自动打开浏览器。端口占用时程序报错退出；
-无法启动浏览器时保留服务并输出可手动访问的地址。
+`MDOC_NO_BROWSER=1 ./mdoc` 禁止自动打开浏览器。端口占用时会打开该端口的地址，
+然后正常退出（退出码 0），不会再次初始化数据库或影响已有服务。
+macOS 会优先激活 Safari、Chrome、Edge、Brave、Chromium、Vivaldi 或 Opera 中
+已有的同地址标签页，保留当前文档、编辑状态和页面位置，不刷新页面。
+未找到标签页、浏览器不支持自动化或未获系统自动化授权时，以及 Windows/Linux，
+使用系统默认方式打开地址。无法启动浏览器时输出可手动访问的地址；新启动的服务会继续运行。
 
 分离模式生成 `dist/frontend/`（预渲染首页和浏览器资源）与
 `dist/bin/mdocman`（使用 `extended,noembed` 构建的 Go 后端）。后端不嵌入或提供
