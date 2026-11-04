@@ -41,6 +41,7 @@ import {
   weekdayLabels,
 } from "../app/reflect/month-grid";
 import { normalizeLinkedImages } from "../app/reflect/reflect-editor";
+import { checkEditorRoundTrip } from "../app/reflect/editor-markdown";
 import {
   chatModelOptions,
   resolveChatModel,
@@ -107,6 +108,44 @@ test("frontmatter remains byte-identical when only the body changes", () => {
     joinFrontmatter(split.header, "# Note\r\n\r\nChanged"),
     source.replace("Body", "Changed"),
   );
+});
+
+test("typing a code fence keeps every intermediate draft editable", () => {
+  for (const marker of ["```", "~~~", "````", "~~~~"]) {
+    for (let length = 1; length <= marker.length; length++) {
+      assert.notEqual(checkEditorRoundTrip(`# API Key\n\n${marker.slice(0, length)}`), "lossy");
+    }
+    for (const suffix of ["", "\n", "ts", "ts\nconst key = 1;", "ts\nconst key = 1;\n", `ts\nconst key = 1;\n${marker}`]) {
+      assert.notEqual(checkEditorRoundTrip(`# API Key\n\n${marker}${suffix}`), "lossy");
+    }
+  }
+});
+
+test("unfinished code fences preserve their marker, width and container", () => {
+  for (const source of [
+    "````\n```\nbody",
+    "```\n~~~\nbody",
+    "~~~\n```\nbody",
+    "> ```ts\n> const key = 1;",
+    "- item\n  ```ts\n  const key = 1;",
+    "- ```ts\n  const key = 1;",
+    "```ts\nclosed\n```\n\n~~~\nunfinished",
+    "# API Key\r\n\r\n```ts\r\nconst key = 1;\r\n",
+  ]) {
+    assert.equal(checkEditorRoundTrip(source), "normalizing", source);
+  }
+});
+
+test("code fence handling retains protection against actual content loss", () => {
+  const lossyTable = "| A | B |\n| - | - |\n| 1 | 2 | discarded |";
+  const conflict = "before\n<<<<<<< this device\nours\n=======\ntheirs\n>>>>>>> other device";
+  for (const source of [lossyTable, conflict]) {
+    for (const suffix of ["", "\n\n```", "\n\n~~~\ncode", "\n\n```ts\ncode\n```", "\n\n> ```ts\n> code"]) {
+      assert.equal(checkEditorRoundTrip(source + suffix), "lossy", source + suffix);
+    }
+  }
+  assert.equal(checkEditorRoundTrip("# API Key\n\n```ts\nconst key = 1;\n```"), "exact");
+  assert.equal(checkEditorRoundTrip("##    Heading"), "normalizing");
 });
 
 test("sync conflict markers resolve to ours, theirs, or both", () => {

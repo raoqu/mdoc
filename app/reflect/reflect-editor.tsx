@@ -19,7 +19,6 @@ import type {
 } from "@meowdown/react";
 import { MarkdownView, MeowdownEditor, WikilinkHoverCard } from "@meowdown/react";
 import {
-  checkRoundTrip,
   type AcceptPendingReplacementOptions,
   type ImageClickPayload,
   type StartPendingReplacementOptions,
@@ -42,6 +41,7 @@ import {
 } from "lucide-react";
 import { NOTE_TEMPLATES, type StoredTemplate } from "./templates";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter";
+import { checkEditorRoundTrip } from "./editor-markdown";
 import {
   BUILT_IN_AI_PROMPTS,
   consumeEventStream,
@@ -182,7 +182,7 @@ export function ReflectEditor({
   const onChangeRef = useRef(onChange);
   const split = splitFrontmatter(document.content);
   const normalizedBody = normalizeLinkedImages(split.body);
-  const fidelity = checkRoundTrip(normalizedBody);
+  const fidelity = useMemo(() => checkEditorRoundTrip(normalizedBody), [normalizedBody]);
   const previewWikiLink = useCallback((target: string) => {
     const normalized = normalizeWikiTarget(target);
     const match = documents.find(({ document: candidate }) =>
