@@ -1,3 +1,7 @@
 <meta name="mdoc-theme" content="{{ .Site.Params.mdocTheme }}">
 <link rel="stylesheet" href="{{ "mdoc/tree.css" | relURL }}"><script defer src="{{ "mdoc/preview-theme.js" | relURL }}"></script>
 <link rel="stylesheet" href="{{ "mdoc/mermaid.css" | relURL }}">
+{{ if .Site.Params.mdocPreview }}
+<link rel="stylesheet" href="{{ "mdoc/preview-images.css" | relURL }}">
+<script defer src="{{ "mdoc/preview-images.js" | relURL }}"></script>
+{{ end }}

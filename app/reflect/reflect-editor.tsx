@@ -17,8 +17,9 @@ import type {
   SelectionMenuItem,
   SelectionMenuSearchHandler,
 } from "@meowdown/react";
-import { MarkdownView, MeowdownEditor, WikilinkHoverCard } from "@meowdown/react";
+import { MarkdownView, MeowdownEditor, WikilinkHoverCard, useKeymap } from "@meowdown/react";
 import {
+  Priority,
   type AcceptPendingReplacementOptions,
   type ImageClickPayload,
   type StartPendingReplacementOptions,
@@ -140,6 +141,34 @@ function imageMetadata(source: string): ImageMetadata {
   } catch {
     return {};
   }
+}
+
+const adjacentImageKeymap = {
+  Backspace(state, dispatch) {
+    const { empty, $from } = state.selection;
+    if (!empty || $from.textOffset !== 0) return false;
+
+    const imageMark = state.schema.marks.mdImage;
+    const previous = imageMark.isInSet($from.nodeBefore?.marks ?? []);
+    const next = imageMark.isInSet($from.nodeAfter?.marks ?? []);
+    if (!previous || !next || previous.eq(next)) return false;
+
+    // Meowdown resolves the image on the right at this boundary, so its
+    // Backspace handler would delete the last character of the left image.
+    let from = $from.pos;
+    for (let index = $from.index() - 1; index >= 0; index--) {
+      const child = $from.parent.child(index);
+      if (!previous.isInSet(child.marks)) break;
+      from -= child.nodeSize;
+    }
+    dispatch?.(state.tr.delete(from, $from.pos).scrollIntoView());
+    return true;
+  },
+} satisfies Parameters<typeof useKeymap>[0];
+
+function AdjacentImageBackspace() {
+  useKeymap(adjacentImageKeymap, { priority: Priority.highest });
+  return null;
 }
 
 export function normalizeLinkedImages(markdown: string): string {
@@ -809,6 +838,7 @@ export function ReflectEditor({
           resolveImageUrl={resolveImageUrl}
           onLinkClick={handleLinkClick}
         >
+          <AdjacentImageBackspace />
           <WikilinkHoverCard className="wikilink-preview-card">
             {({ target }) => previewWikiLink(target)}
           </WikilinkHoverCard>

@@ -316,8 +316,15 @@ func TestPathPreviewUsesDirectoryReadmeAndServesRelativeAssets(t *testing.T) {
 	}
 
 	index := serveTestPath(t, preview, "/")
-	if !strings.Contains(index, `<h1 id="project">Project</h1>`) || !strings.Contains(index, `src="assets/logo.txt"`) {
-		t.Fatalf("directory README was not rendered: %s", index)
+	for _, expected := range []string{
+		`<h1 id="project">Project</h1>`,
+		`src="assets/logo.txt" alt="logo" loading="lazy" data-preview-image`,
+		`/mdoc/preview-images.js"`,
+		`/mdoc/preview-images.css"`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("directory preview missing %q: %s", expected, index)
+		}
 	}
 	if asset := serveTestPath(t, preview, "/assets/logo.txt"); asset != "asset-body" {
 		t.Fatalf("relative asset = %q", asset)

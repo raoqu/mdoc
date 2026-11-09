@@ -273,7 +273,10 @@ func TestPublicationHugoIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"STACK_PREVIEW_SENTINEL", "path-tree", "Stack tree", "mdoc/tree.css", "language-mermaid", `src="assets/local.png"`} {
+	for _, expected := range []string{
+		"STACK_PREVIEW_SENTINEL", "path-tree", "Stack tree", "mdoc/tree.css", "language-mermaid",
+		`src="assets/local.png" alt="local" loading="lazy" data-preview-image`, "mdoc/preview-images.js",
+	} {
 		if !strings.Contains(string(rendered), expected) {
 			t.Fatalf("Stack preview missing %s", expected)
 		}
